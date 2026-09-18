@@ -6,15 +6,13 @@ from datetime import datetime, timedelta
 from flask import Flask
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.context import FSMContext
 from aiogram.methods import DeleteBusinessMessages
 
 # ================== НАСТРОЙКИ ==================
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8632065717:AAEYC3ciYv-W7PHzMrWFaX7FyRYNlZJ5_rE")
 CARD_NUMBER = "2204320449407461"
 OWNER_USERNAME = "ysorn"
-OWNER_ID = 8502858396  # Telegram ID владельца (для получения скриншотов)
+OWNER_ID = 8502858396
 
 PRICES = {
     "1month": {"rub": 100, "days": 30, "label": "1 месяц"},
@@ -28,12 +26,8 @@ BANNER_PATH = os.path.join(os.path.dirname(__file__), "IMG_20260918_155302_695.j
 
 # Хранилища
 business_owners = {}
-subscriptions = {}  # user_id -> datetime окончания подписки
-pending_payments = {}  # user_id -> {plan, message_id}
-
-# ================== FSM ДЛЯ ОПЛАТЫ ==================
-class PayState(StatesGroup):
-    waiting_screenshot = State()
+subscriptions = {}
+pending_payments = {}  # user_id -> {"plan": "1month"}
 
 # ================== FLASK ==================
 flask_app = Flask(__name__)
@@ -140,7 +134,6 @@ async def cb_sub(call: types.CallbackQuery):
 async def cb_pay(call: types.CallbackQuery):
     plan = call.data.split("_")[1]
     p = PRICES[plan]
-    pending_payments[call.from_user.id] = {"plan": plan}
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"paid_{plan}")],
         [types.InlineKeyboardButton(text="🔙 Назад", callback_data="sub_menu")],
@@ -149,61 +142,66 @@ async def cb_pay(call: types.CallbackQuery):
         f"💳 *Оплата «{p['label']}»*\n\n"
         f"💰 Сумма: *{p['rub']}₽*\n"
         f"💳 Карта: `{CARD_NUMBER}`\n\n"
-        f"📸 После перевода пришли скриншот в чат бота.",
+        f"📸 После перевода нажми кнопку «Я оплатил» и пришли скриншот.",
         parse_mode="Markdown", reply_markup=kb)
 
 @dp.callback_query(F.data.startswith("paid_"))
-async def cb_paid(call: types.CallbackQuery, state: FSMContext):
+async def cb_paid(call: types.CallbackQuery):
     plan = call.data.split("_")[1]
-    await state.update_data(plan=plan)
-    await state.set_state(PayState.waiting_screenshot)
+    pending_payments[call.from_user.id] = {"plan": plan}
+    logging.info(f"Ожидаю скриншот от {call.from_user.id}, тариф {plan}")
     await call.message.answer("📸 Пришли скриншот оплаты одним сообщением-фото.")
 
-@dp.message(PayState.waiting_screenshot, F.photo)
-async def on_screenshot(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    plan = data.get("plan", "1month")
+# ================== ПРИЁМ СКРИНШОТА (в ЛС с ботом) ==================
+@dp.message(F.photo)
+async def on_screenshot(message: types.Message):
+    user_id = message.from_user.id
+    logging.info(f"Получено фото от {user_id}, в pending: {user_id in pending_payments}")
+
+    if user_id not in pending_payments:
+        return
+
+    plan = pending_payments[user_id].get("plan", "1month")
     user = message.from_user
 
-    # Пересылаем скриншот владельцу с кнопками
     owner_kb = types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"approve_{user.id}_{plan}")],
         [types.InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject_{user.id}")],
     ])
-    await bot.send_photo(
-        chat_id=OWNER_ID,
-        photo=message.photo[-1].file_id,
-        caption=(
-            f"💰 *Новая оплата*\n\n"
-            f"👤 Покупатель: @{user.username or user.first_name} (ID: `{user.id}`)\n"
-            f"📦 Тариф: *{PRICES[plan]['label']}* — {PRICES[plan]['rub']}₽"
-        ),
-        parse_mode="Markdown",
-        reply_markup=owner_kb
-    )
-    await message.answer("✅ Скриншот отправлен! Ожидай подтверждения оплаты.")
-    await state.clear()
+    try:
+        await bot.send_photo(
+            chat_id=OWNER_ID,
+            photo=message.photo[-1].file_id,
+            caption=(
+                f"💰 *Новая оплата*\n\n"
+                f"👤 Покупатель: @{user.username or user.first_name} (ID: `{user.id}`)\n"
+                f"📦 Тариф: *{PRICES[plan]['label']}* — {PRICES[plan]['rub']}₽"
+            ),
+            parse_mode="Markdown",
+            reply_markup=owner_kb
+        )
+        await message.answer("✅ Скриншот отправлен! Ожидай подтверждения оплаты.")
+        pending_payments.pop(user_id, None)
+    except Exception as e:
+        logging.error(f"Не смог переслать скриншот: {e}")
+        await message.answer("⚠️ Ошибка при отправке. Свяжитесь с @ysorn.")
 
-# ================== ПОДТВЕРЖДЕНИЕ ОТ ВЛАДЕЛЬЦА ==================
+# ================== ПОДТВЕРЖДЕНИЕ ==================
 @dp.callback_query(F.data.startswith("approve_"))
 async def cb_approve(call: types.CallbackQuery):
     if call.from_user.id != OWNER_ID:
         await call.answer("Только владелец может подтверждать!", show_alert=True)
         return
-    _, user_id, plan = call.data.split("_")
-    user_id = int(user_id)
+    parts = call.data.split("_")
+    user_id = int(parts[1])
+    plan = parts[2]
     days = PRICES[plan]["days"]
 
-    # Продлеваем подписку
     now = datetime.now()
     current = subscriptions.get(user_id)
-    if current and current > now:
-        new_until = current + timedelta(days=days)
-    else:
-        new_until = now + timedelta(days=days)
+    new_until = (current + timedelta(days=days)) if (current and current > now) else (now + timedelta(days=days))
     subscriptions[user_id] = new_until
 
-    # Уведомляем покупателя
     try:
         await bot.send_message(
             user_id,
@@ -215,12 +213,8 @@ async def cb_approve(call: types.CallbackQuery):
     except Exception as e:
         logging.error(f"Не смог уведомить покупателя: {e}")
 
-    # Редактируем сообщение владельца
     try:
-        await call.message.edit_caption(
-            caption=f"✅ Подтверждено: @{call.from_user.username or ''} (тариф {PRICES[plan]['label']})",
-            parse_mode="Markdown"
-        )
+        await call.message.edit_caption(caption="✅ Оплата подтверждена")
     except:
         pass
     await call.answer("Подписка активирована ✅")
@@ -230,8 +224,7 @@ async def cb_reject(call: types.CallbackQuery):
     if call.from_user.id != OWNER_ID:
         await call.answer("Только владелец может отклонять!", show_alert=True)
         return
-    _, user_id = call.data.split("_")
-    user_id = int(user_id)
+    user_id = int(call.data.split("_")[1])
     try:
         await bot.send_message(user_id, "❌ Оплата отклонена. Свяжитесь с @ysorn.")
     except:
