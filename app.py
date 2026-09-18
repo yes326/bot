@@ -28,12 +28,12 @@ WARN_MUTE_MINUTES = 5
 
 BANNER_PATH = os.path.join(os.path.dirname(__file__), "IMG_20260918_155302_695.jpg")
 
-# Хранилища (в памяти, сбрасываются при перезапуске Render)
+# Хранилища
 business_owners = {}
-subscriptions = {}       # user_id -> datetime окончания подписки
-pending_payments = {}    # user_id -> {"plan": "1month"}
-used_trials = set()      # user_id тех, кто уже активировал пробный
-message_cache = {}       # chat_id -> {msg_id: {"text","time","sender"}}
+subscriptions = {}
+pending_payments = {}
+used_trials = set()
+message_cache = {}
 
 # ================== FLASK ==================
 flask_app = Flask(__name__)
@@ -104,7 +104,6 @@ def back_kb():
     ])
 
 def plans_kb(user_id=None):
-    """Меню тарифов. Если user_id не использовал пробный — показывает кнопку."""
     rows = []
     if user_id is not None and user_id not in used_trials:
         rows.append([types.InlineKeyboardButton(text=f"🎁 Пробный период ({TRIAL_DAYS} дней)", callback_data="trial")])
@@ -112,8 +111,7 @@ def plans_kb(user_id=None):
         rows.append([types.InlineKeyboardButton(text=f"{v['label']} — {v['rub']}₽", callback_data=f"pay_{k}")])
     rows.append([types.InlineKeyboardButton(text="🔙 Назад", callback_data="back_main")])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
-
-# ================== /START ==================
+    # ================== /START ==================
 @dp.message(F.text == "/start")
 async def start_cmd(message: types.Message):
     user_id = message.from_user.id
@@ -185,7 +183,6 @@ async def cb_cmds(call: types.CallbackQuery):
         "`.history N` — последние N сообщений",
         parse_mode="Markdown", reply_markup=back_kb())
 
-# ================== ПОДПИСКА ==================
 @dp.callback_query(F.data == "sub_menu")
 async def cb_sub(call: types.CallbackQuery):
     user_id = call.from_user.id
@@ -195,11 +192,9 @@ async def cb_sub(call: types.CallbackQuery):
     if current and current > now:
         days_left = (current - now).days
         status = f"активна до {current.strftime('%d.%m.%Y')} (осталось {days_left} дн.)"
-
     trial_text = ""
     if user_id not in used_trials:
         trial_text = f"🎁 Пробный период — {TRIAL_DAYS} дней (только 1 раз)\n\n"
-
     await call.message.answer(
         f"💎 *Подписка AntiSpam Defender*\n\n"
         f"📌 Статус: *{status}*\n\n"
@@ -213,23 +208,16 @@ async def cb_sub(call: types.CallbackQuery):
 async def cb_trial(call: types.CallbackQuery):
     user_id = call.from_user.id
     now = datetime.now()
-
-    # Уже использовал?
     if user_id in used_trials:
         await call.answer("❌ Ты уже использовал пробный период!", show_alert=True)
         return
-
-    # Есть активная подписка?
     current = subscriptions.get(user_id)
     if current and current > now:
         await call.answer("❌ У тебя уже есть активная подписка!", show_alert=True)
         return
-
-    # Активируем пробный
     used_trials.add(user_id)
     until = now + timedelta(days=TRIAL_DAYS)
     subscriptions[user_id] = until
-
     await call.message.answer(
         f"🎁 *Пробный период активирован!*\n\n"
         f"💎 Тебе доступно *{TRIAL_DAYS} дней* бесплатно.\n"
@@ -257,7 +245,6 @@ async def cb_pay(call: types.CallbackQuery):
 async def cb_paid(call: types.CallbackQuery):
     plan = call.data.split("_")[1]
     pending_payments[call.from_user.id] = {"plan": plan}
-    logging.info(f"Ожидаю скриншот от {call.from_user.id}, тариф {plan}")
     await call.message.answer("📸 Пришли скриншот оплаты одним сообщением-фото.")
 
 @dp.message(F.photo)
@@ -298,12 +285,10 @@ async def cb_approve(call: types.CallbackQuery):
     user_id = int(parts[1])
     plan = parts[2]
     days = PRICES[plan]["days"]
-
     now = datetime.now()
     current = subscriptions.get(user_id)
     new_until = (current + timedelta(days=days)) if (current and current > now) else (now + timedelta(days=days))
     subscriptions[user_id] = new_until
-
     try:
         await bot.send_message(
             user_id,
@@ -312,8 +297,8 @@ async def cb_approve(call: types.CallbackQuery):
             f"📅 Действует до: *{new_until.strftime('%d.%m.%Y %H:%M')}*",
             parse_mode="Markdown"
         )
-    except Exception as e:
-        logging.error(f"Не смог уведомить: {e}")
+    except:
+        pass
     try:
         await call.message.edit_caption(caption="✅ Оплата подтверждена")
     except:
@@ -345,8 +330,7 @@ async def cb_ref(call: types.CallbackQuery):
 @dp.callback_query(F.data == "howto")
 async def cb_howto(call: types.CallbackQuery):
     await call.message.answer("📚 Настройки → Аккаунт → Автоматизация чатов → Подключить бота", reply_markup=back_kb())
-
-# ================== BUSINESS КОМАНДЫ ==================
+    # ================== BUSINESS КОМАНДЫ ==================
 @dp.business_message(F.text.startswith(".mute"))
 async def b_mute(message: types.Message):
     if not await is_owner(message):
@@ -372,7 +356,6 @@ async def b_warn(message: types.Message):
     t = message.chat.id
     warns[t] = min(warns.get(t, 0) + n, WARN_LIMIT)
     text = f"⚠️ *Предупреждений: {warns[t]}/{WARN_LIMIT}*"
-
     msg_id = warn_messages.get(t)
     if msg_id:
         try:
@@ -389,7 +372,6 @@ async def b_warn(message: types.Message):
     else:
         new_msg = await message.answer(text, parse_mode="Markdown")
         warn_messages[t] = new_msg.message_id
-
     if warns[t] >= WARN_LIMIT:
         mutes[t] = datetime.now() + timedelta(minutes=WARN_MUTE_MINUTES)
         try:
@@ -536,4 +518,19 @@ async def b_default(message: types.Message):
                 logging.error(f"Ошибка удаления: {e}")
             return
 
-    if t i
+    if t in mutes and mutes[t] <= datetime.now():
+        mutes.pop(t, None); warns.pop(t, None)
+
+    if clone.get(t) and message.text and msg_from != owner_id:
+        await message.answer(message.text)
+
+# ================== ЗАПУСК ==================
+async def main():
+    me = await bot.get_me()
+    bot.username = me.username
+    print(f"✅ Bot started: @{me.username}")
+    await dp.start_polling(bot, drop_pending_updates=True)
+
+if __name__ == "__main__":
+    threading.Thread(target=run_flask, daemon=True).start()
+    asyncio.run(main())
