@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from flask import Flask
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.methods import DeleteBusinessMessages
+from aiogram.methods import DeleteBusinessMessages, EditMessageText
 
 # ================== НАСТРОЙКИ ==================
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8632065717:AAEYC3ciYv-W7PHzMrWFaX7FyRYNlZJ5_rE")
@@ -30,7 +30,7 @@ BANNER_PATH = os.path.join(os.path.dirname(__file__), "IMG_20260918_155302_695.j
 business_owners = {}
 subscriptions = {}
 pending_payments = {}
-message_cache = {}  # chat_id -> {msg_id: {"text", "time", "sender"}}
+message_cache = {}
 
 # ================== FLASK ==================
 flask_app = Flask(__name__)
@@ -51,6 +51,7 @@ dp = Dispatcher(storage=MemoryStorage())
 warns = {}
 mutes = {}
 clone = {}
+warn_messages = {}  # chat_id -> message_id последнего warn-сообщения
 
 # ================== ПРОВЕРКА ПОДПИСКИ ==================
 async def check_subscription(user_id):
@@ -108,7 +109,6 @@ def plans_kb():
 @dp.message(F.text == "/start")
 async def start_cmd(message: types.Message):
     user_id = message.from_user.id
-
     if not await check_subscription(user_id):
         await message.answer(
             "⚠️ *Для использования бота нужно подписаться на наш канал.*\n\n"
@@ -117,7 +117,6 @@ async def start_cmd(message: types.Message):
             reply_markup=subscribe_kb()
         )
         return
-
     try:
         await message.answer_photo(
             photo=types.FSInputFile(BANNER_PATH),
@@ -198,7 +197,7 @@ async def cb_pay(call: types.CallbackQuery):
         f"💳 *Оплата «{p['label']}»*\n\n"
         f"💰 Сумма: *{p['rub']}₽*\n"
         f"💳 Карта: `{CARD_NUMBER}`\n\n"
-        f"📸 После перевода нажми кнопку «Я оплатил» и пришли скриншот.",
+        f"📸 После перевода нажми «Я оплатил» и пришли скриншот.",
         parse_mode="Markdown", reply_markup=kb)
 
 @dp.callback_query(F.data.startswith("paid_"))
@@ -208,18 +207,13 @@ async def cb_paid(call: types.CallbackQuery):
     logging.info(f"Ожидаю скриншот от {call.from_user.id}, тариф {plan}")
     await call.message.answer("📸 Пришли скриншот оплаты одним сообщением-фото.")
 
-# ================== ПРИЁМ СКРИНШОТА ==================
 @dp.message(F.photo)
 async def on_screenshot(message: types.Message):
     user_id = message.from_user.id
-    logging.info(f"Получено фото от {user_id}, в pending: {user_id in pending_payments}")
-
     if user_id not in pending_payments:
         return
-
     plan = pending_payments[user_id].get("plan", "1month")
     user = message.from_user
-
     owner_kb = types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"approve_{user.id}_{plan}")],
         [types.InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject_{user.id}")],
@@ -236,13 +230,12 @@ async def on_screenshot(message: types.Message):
             parse_mode="Markdown",
             reply_markup=owner_kb
         )
-        await message.answer("✅ Скриншот отправлен! Ожидай подтверждения оплаты.")
+        await message.answer("✅ Скриншот отправлен! Ожидай подтверждения.")
         pending_payments.pop(user_id, None)
     except Exception as e:
-        logging.error(f"Не смог переслать скриншот: {e}")
-        await message.answer("⚠️ Ошибка при отправке. Свяжитесь с @ysorn.")
+        logging.error(f"Ошибка пересылки скриншота: {e}")
+        await message.answer("⚠️ Ошибка. Свяжитесь с @ysorn.")
 
-# ================== ПОДТВЕРЖДЕНИЕ ОПЛАТЫ ==================
 @dp.callback_query(F.data.startswith("approve_"))
 async def cb_approve(call: types.CallbackQuery):
     if call.from_user.id != OWNER_ID:
@@ -268,7 +261,6 @@ async def cb_approve(call: types.CallbackQuery):
         )
     except Exception as e:
         logging.error(f"Не смог уведомить покупателя: {e}")
-
     try:
         await call.message.edit_caption(caption="✅ Оплата подтверждена")
     except:
@@ -278,7 +270,7 @@ async def cb_approve(call: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("reject_"))
 async def cb_reject(call: types.CallbackQuery):
     if call.from_user.id != OWNER_ID:
-        await call.answer("Только владелец может отклонять!", show_alert=True)
+        await call.answer("Только владелец!", show_alert=True)
         return
     user_id = int(call.data.split("_")[1])
     try:
@@ -291,7 +283,6 @@ async def cb_reject(call: types.CallbackQuery):
         pass
     await call.answer("Отклонено")
 
-# ================== РЕФЕРАЛКА ==================
 @dp.callback_query(F.data == "ref")
 async def cb_ref(call: types.CallbackQuery):
     uname = bot.username or "my_bot"
@@ -319,6 +310,7 @@ async def b_unmute(message: types.Message):
     mutes.pop(message.chat.id, None)
     await message.answer("🔊 Мут снят")
 
+# ================== .WARN (с EditMessageText) ==================
 @dp.business_message(F.text.startswith(".warn"))
 async def b_warn(message: types.Message):
     if not await is_owner(message):
@@ -326,18 +318,72 @@ async def b_warn(message: types.Message):
     parts = message.text.split()
     n = int(parts[1]) if len(parts) > 1 else 1
     t = message.chat.id
-    warns[t] = min(warns.get(t, 0) + n, WARN_LIMIT)
-    await message.answer(f"⚠️ {warns[t]}/{WARN_LIMIT}")
+
+    current = warns.get(t, 0)
+    warns[t] = min(current + n, WARN_LIMIT)
+
+    text = f"⚠️ *Предупреждений: {warns[t]}/{WARN_LIMIT}*"
+
+    # Пробуем отредактировать предыдущее warn-сообщение
+    msg_id = warn_messages.get(t)
+    if msg_id:
+        try:
+            await bot(
+                EditMessageText(
+                    business_connection_id=message.business_connection_id,
+                    chat_id=message.chat.id,
+                    message_id=msg_id,
+                    text=text,
+                    parse_mode="Markdown",
+                )
+            )
+        except Exception as e:
+            logging.error(f"Не смог обновить warn: {e}")
+            new_msg = await message.answer(text, parse_mode="Markdown")
+            warn_messages[t] = new_msg.message_id
+    else:
+        new_msg = await message.answer(text, parse_mode="Markdown")
+        warn_messages[t] = new_msg.message_id
+
+    # Если достигли лимита — мут
     if warns[t] >= WARN_LIMIT:
         mutes[t] = datetime.now() + timedelta(minutes=WARN_MUTE_MINUTES)
+        try:
+            await bot(
+                EditMessageText(
+                    business_connection_id=message.business_connection_id,
+                    chat_id=message.chat.id,
+                    message_id=warn_messages[t],
+                    text=f"⚠️ *Предупреждений: {WARN_LIMIT}/{WARN_LIMIT}*\n🔇 *Мут на {WARN_MUTE_MINUTES} минут!*",
+                    parse_mode="Markdown",
+                )
+            )
+        except:
+            pass
 
 @dp.business_message(F.text.startswith(".unwarn"))
 async def b_unwarn(message: types.Message):
     if not await is_owner(message):
         return
-    warns.pop(message.chat.id, None)
-    mutes.pop(message.chat.id, None)
-    await message.answer("✅ Сброшено")
+    t = message.chat.id
+    warns.pop(t, None)
+    mutes.pop(t, None)
+    msg_id = warn_messages.pop(t, None)
+    if msg_id:
+        try:
+            await bot(
+                EditMessageText(
+                    business_connection_id=message.business_connection_id,
+                    chat_id=message.chat.id,
+                    message_id=msg_id,
+                    text="✅ *Предупреждения сняты. ⚠️ 0/5*",
+                    parse_mode="Markdown",
+                )
+            )
+            return
+        except:
+            pass
+    await message.answer("✅ Предупреждения сняты.")
 
 @dp.business_message(F.text.startswith(".spam"))
 async def b_spam(message: types.Message):
@@ -379,31 +425,27 @@ async def b_history(message: types.Message):
     t = message.chat.id
     parts = message.text.split()
     n = int(parts[1]) if len(parts) > 1 else 10
-
     if t not in message_cache or not message_cache[t]:
         await message.answer("📭 История пуста.")
         return
-
     items = sorted(message_cache[t].items(), key=lambda x: x[1]["time"])[-n:]
     owner_id = await get_owner_id(message.business_connection_id)
-
     text = f"📜 *Последние {len(items)} сообщений:*\n\n"
     for msg_id, data in items:
         sender = "Ты" if data["sender"] == owner_id else "Собеседник"
         text += f"*{sender}* ({data['time']}):\n`{data['text'][:200]}`\n\n"
-
     if len(text) > 4000:
         text = text[:4000] + "\n...(обрезано)"
     await message.answer(text, parse_mode="Markdown")
 
-# ================== ОБРАБОТКА СООБЩЕНИЙ ==================
+# ================== ОБРАБОТКА ВСЕХ СООБЩЕНИЙ ==================
 @dp.business_message()
 async def b_default(message: types.Message):
     t = message.chat.id
     owner_id = await get_owner_id(message.business_connection_id)
     msg_from = message.from_user.id if message.from_user else 0
 
-    # ---------- 1. Проверка изменений ----------
+    # Проверка изменений
     if t in message_cache and message.message_id in message_cache[t]:
         old = message_cache[t][message.message_id]
         new_text = message.text or "[медиа]"
@@ -418,11 +460,11 @@ async def b_default(message: types.Message):
                     f"🕐 {datetime.now().strftime('%H:%M:%S')}",
                     parse_mode="Markdown"
                 )
-            except Exception as e:
-                logging.error(f"Не смог уведомить об изменении: {e}")
+            except:
+                pass
         message_cache[t][message.message_id]["text"] = new_text
 
-    # ---------- 2. Сохраняем сообщение в кэш ----------
+    # Сохраняем в кэш
     if t not in message_cache:
         message_cache[t] = {}
     message_cache[t][message.message_id] = {
@@ -434,7 +476,7 @@ async def b_default(message: types.Message):
         oldest = sorted(message_cache[t].keys())[0]
         message_cache[t].pop(oldest, None)
 
-    # ---------- 3. Мут — удаляем сообщения собеседника ----------
+    # Мут — удаляем сообщения собеседника
     if t in mutes and mutes[t] > datetime.now():
         if msg_from != owner_id:
             try:
@@ -442,13 +484,12 @@ async def b_default(message: types.Message):
                     business_connection_id=message.business_connection_id,
                     message_ids=[message.message_id],
                 ))
-                # Уведомляем владельца, что удалили сообщение
                 try:
                     await bot.send_message(
                         OWNER_ID,
                         f"🗑 *Удалено (мут)*\n\n"
                         f"👤 От: @{message.from_user.username or message.from_user.first_name}\n"
-                        f"📝 Текст: `{(message.text or '[медиа]')[:200]}`\n"
+                        f"📝 `{(message.text or '[медиа]')[:200]}`\n"
                         f"🕐 {datetime.now().strftime('%H:%M:%S')}",
                         parse_mode="Markdown"
                     )
@@ -461,7 +502,7 @@ async def b_default(message: types.Message):
     if t in mutes and mutes[t] <= datetime.now():
         mutes.pop(t, None); warns.pop(t, None)
 
-    # ---------- 4. Автоповтор ----------
+    # Автоповтор
     if clone.get(t) and message.text and msg_from != owner_id:
         await message.answer(message.text)
 
