@@ -22,15 +22,18 @@ PRICES = {
     "6months": {"rub": 599, "days": 180, "label": "6 месяцев"},
     "1year": {"rub": 1199, "days": 365, "label": "1 год"},
 }
+TRIAL_DAYS = 7
 WARN_LIMIT = 5
 WARN_MUTE_MINUTES = 5
 
 BANNER_PATH = os.path.join(os.path.dirname(__file__), "IMG_20260918_155302_695.jpg")
 
+# Хранилища (в памяти, сбрасываются при перезапуске Render)
 business_owners = {}
-subscriptions = {}
-pending_payments = {}
-message_cache = {}
+subscriptions = {}       # user_id -> datetime окончания подписки
+pending_payments = {}    # user_id -> {"plan": "1month"}
+used_trials = set()      # user_id тех, кто уже активировал пробный
+message_cache = {}       # chat_id -> {msg_id: {"text","time","sender"}}
 
 # ================== FLASK ==================
 flask_app = Flask(__name__)
@@ -51,7 +54,7 @@ dp = Dispatcher(storage=MemoryStorage())
 warns = {}
 mutes = {}
 clone = {}
-warn_messages = {}  # chat_id -> message_id последнего warn-сообщения
+warn_messages = {}
 
 # ================== ПРОВЕРКА ПОДПИСКИ ==================
 async def check_subscription(user_id):
@@ -100,10 +103,15 @@ def back_kb():
         [types.InlineKeyboardButton(text="🔙 В меню", callback_data="back_main")]
     ])
 
-def plans_kb():
-    return types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text=f"{v['label']} — {v['rub']}₽", callback_data=f"pay_{k}")] for k, v in PRICES.items()
-    ] + [[types.InlineKeyboardButton(text="🔙 Назад", callback_data="back_main")]])
+def plans_kb(user_id=None):
+    """Меню тарифов. Если user_id не использовал пробный — показывает кнопку."""
+    rows = []
+    if user_id is not None and user_id not in used_trials:
+        rows.append([types.InlineKeyboardButton(text=f"🎁 Пробный период ({TRIAL_DAYS} дней)", callback_data="trial")])
+    for k, v in PRICES.items():
+        rows.append([types.InlineKeyboardButton(text=f"{v['label']} — {v['rub']}₽", callback_data=f"pay_{k}")])
+    rows.append([types.InlineKeyboardButton(text="🔙 Назад", callback_data="back_main")])
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 # ================== /START ==================
 @dp.message(F.text == "/start")
@@ -177,13 +185,58 @@ async def cb_cmds(call: types.CallbackQuery):
         "`.history N` — последние N сообщений",
         parse_mode="Markdown", reply_markup=back_kb())
 
+# ================== ПОДПИСКА ==================
 @dp.callback_query(F.data == "sub_menu")
 async def cb_sub(call: types.CallbackQuery):
+    user_id = call.from_user.id
+    now = datetime.now()
+    current = subscriptions.get(user_id)
+    status = "не активна"
+    if current and current > now:
+        days_left = (current - now).days
+        status = f"активна до {current.strftime('%d.%m.%Y')} (осталось {days_left} дн.)"
+
+    trial_text = ""
+    if user_id not in used_trials:
+        trial_text = f"🎁 Пробный период — {TRIAL_DAYS} дней (только 1 раз)\n\n"
+
     await call.message.answer(
-        "💎 *Подписка AntiSpam Defender*\n\n"
-        "🎁 Новым — пробный период 7 дней!\n\n"
-        "Выбери тариф 👇",
-        parse_mode="Markdown", reply_markup=plans_kb())
+        f"💎 *Подписка AntiSpam Defender*\n\n"
+        f"📌 Статус: *{status}*\n\n"
+        f"{trial_text}"
+        f"Выбери действие 👇",
+        parse_mode="Markdown",
+        reply_markup=plans_kb(user_id)
+    )
+
+@dp.callback_query(F.data == "trial")
+async def cb_trial(call: types.CallbackQuery):
+    user_id = call.from_user.id
+    now = datetime.now()
+
+    # Уже использовал?
+    if user_id in used_trials:
+        await call.answer("❌ Ты уже использовал пробный период!", show_alert=True)
+        return
+
+    # Есть активная подписка?
+    current = subscriptions.get(user_id)
+    if current and current > now:
+        await call.answer("❌ У тебя уже есть активная подписка!", show_alert=True)
+        return
+
+    # Активируем пробный
+    used_trials.add(user_id)
+    until = now + timedelta(days=TRIAL_DAYS)
+    subscriptions[user_id] = until
+
+    await call.message.answer(
+        f"🎁 *Пробный период активирован!*\n\n"
+        f"💎 Тебе доступно *{TRIAL_DAYS} дней* бесплатно.\n"
+        f"📅 Действует до: *{until.strftime('%d.%m.%Y %H:%M')}*",
+        parse_mode="Markdown"
+    )
+    await call.answer("Пробный период активирован ✅")
 
 @dp.callback_query(F.data.startswith("pay_"))
 async def cb_pay(call: types.CallbackQuery):
@@ -233,7 +286,7 @@ async def on_screenshot(message: types.Message):
         await message.answer("✅ Скриншот отправлен! Ожидай подтверждения.")
         pending_payments.pop(user_id, None)
     except Exception as e:
-        logging.error(f"Ошибка пересылки скриншота: {e}")
+        logging.error(f"Ошибка пересылки: {e}")
         await message.answer("⚠️ Ошибка. Свяжитесь с @ysorn.")
 
 @dp.callback_query(F.data.startswith("approve_"))
@@ -260,7 +313,7 @@ async def cb_approve(call: types.CallbackQuery):
             parse_mode="Markdown"
         )
     except Exception as e:
-        logging.error(f"Не смог уведомить покупателя: {e}")
+        logging.error(f"Не смог уведомить: {e}")
     try:
         await call.message.edit_caption(caption="✅ Оплата подтверждена")
     except:
@@ -310,7 +363,6 @@ async def b_unmute(message: types.Message):
     mutes.pop(message.chat.id, None)
     await message.answer("🔊 Мут снят")
 
-# ================== .WARN (с EditMessageText) ==================
 @dp.business_message(F.text.startswith(".warn"))
 async def b_warn(message: types.Message):
     if not await is_owner(message):
@@ -318,46 +370,36 @@ async def b_warn(message: types.Message):
     parts = message.text.split()
     n = int(parts[1]) if len(parts) > 1 else 1
     t = message.chat.id
-
-    current = warns.get(t, 0)
-    warns[t] = min(current + n, WARN_LIMIT)
-
+    warns[t] = min(warns.get(t, 0) + n, WARN_LIMIT)
     text = f"⚠️ *Предупреждений: {warns[t]}/{WARN_LIMIT}*"
 
-    # Пробуем отредактировать предыдущее warn-сообщение
     msg_id = warn_messages.get(t)
     if msg_id:
         try:
-            await bot(
-                EditMessageText(
-                    business_connection_id=message.business_connection_id,
-                    chat_id=message.chat.id,
-                    message_id=msg_id,
-                    text=text,
-                    parse_mode="Markdown",
-                )
-            )
-        except Exception as e:
-            logging.error(f"Не смог обновить warn: {e}")
+            await bot(EditMessageText(
+                business_connection_id=message.business_connection_id,
+                chat_id=message.chat.id,
+                message_id=msg_id,
+                text=text,
+                parse_mode="Markdown",
+            ))
+        except:
             new_msg = await message.answer(text, parse_mode="Markdown")
             warn_messages[t] = new_msg.message_id
     else:
         new_msg = await message.answer(text, parse_mode="Markdown")
         warn_messages[t] = new_msg.message_id
 
-    # Если достигли лимита — мут
     if warns[t] >= WARN_LIMIT:
         mutes[t] = datetime.now() + timedelta(minutes=WARN_MUTE_MINUTES)
         try:
-            await bot(
-                EditMessageText(
-                    business_connection_id=message.business_connection_id,
-                    chat_id=message.chat.id,
-                    message_id=warn_messages[t],
-                    text=f"⚠️ *Предупреждений: {WARN_LIMIT}/{WARN_LIMIT}*\n🔇 *Мут на {WARN_MUTE_MINUTES} минут!*",
-                    parse_mode="Markdown",
-                )
-            )
+            await bot(EditMessageText(
+                business_connection_id=message.business_connection_id,
+                chat_id=message.chat.id,
+                message_id=warn_messages[t],
+                text=f"⚠️ *Предупреждений: {WARN_LIMIT}/{WARN_LIMIT}*\n🔇 *Мут на {WARN_MUTE_MINUTES} минут!*",
+                parse_mode="Markdown",
+            ))
         except:
             pass
 
@@ -371,15 +413,13 @@ async def b_unwarn(message: types.Message):
     msg_id = warn_messages.pop(t, None)
     if msg_id:
         try:
-            await bot(
-                EditMessageText(
-                    business_connection_id=message.business_connection_id,
-                    chat_id=message.chat.id,
-                    message_id=msg_id,
-                    text="✅ *Предупреждения сняты. ⚠️ 0/5*",
-                    parse_mode="Markdown",
-                )
-            )
+            await bot(EditMessageText(
+                business_connection_id=message.business_connection_id,
+                chat_id=message.chat.id,
+                message_id=msg_id,
+                text="✅ *Предупреждения сняты. ⚠️ 0/5*",
+                parse_mode="Markdown",
+            ))
             return
         except:
             pass
@@ -445,7 +485,6 @@ async def b_default(message: types.Message):
     owner_id = await get_owner_id(message.business_connection_id)
     msg_from = message.from_user.id if message.from_user else 0
 
-    # Проверка изменений
     if t in message_cache and message.message_id in message_cache[t]:
         old = message_cache[t][message.message_id]
         new_text = message.text or "[медиа]"
@@ -464,7 +503,6 @@ async def b_default(message: types.Message):
                 pass
         message_cache[t][message.message_id]["text"] = new_text
 
-    # Сохраняем в кэш
     if t not in message_cache:
         message_cache[t] = {}
     message_cache[t][message.message_id] = {
@@ -476,7 +514,6 @@ async def b_default(message: types.Message):
         oldest = sorted(message_cache[t].keys())[0]
         message_cache[t].pop(oldest, None)
 
-    # Мут — удаляем сообщения собеседника
     if t in mutes and mutes[t] > datetime.now():
         if msg_from != owner_id:
             try:
@@ -499,20 +536,4 @@ async def b_default(message: types.Message):
                 logging.error(f"Ошибка удаления: {e}")
             return
 
-    if t in mutes and mutes[t] <= datetime.now():
-        mutes.pop(t, None); warns.pop(t, None)
-
-    # Автоповтор
-    if clone.get(t) and message.text and msg_from != owner_id:
-        await message.answer(message.text)
-
-# ================== ЗАПУСК ==================
-async def main():
-    me = await bot.get_me()
-    bot.username = me.username
-    print(f"✅ Bot started: @{me.username}")
-    await dp.start_polling(bot, drop_pending_updates=True)
-
-if __name__ == "__main__":
-    threading.Thread(target=run_flask, daemon=True).start()
-    asyncio.run(main())
+    if t i
