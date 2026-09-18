@@ -22,7 +22,10 @@ PRICES = {
 WARN_LIMIT = 5
 WARN_MUTE_MINUTES = 5
 
-# Кэш: business_connection_id -> owner_user_id
+# Картинка рядом с app.py
+BANNER_PATH = os.path.join(os.path.dirname(__file__), "IMG_20260918_155302_695.jpg")
+
+# Кэш владельцев бизнес-подключений
 business_owners = {}
 
 # ================== FLASK (для Render) ==================
@@ -47,7 +50,6 @@ clone = {}
 
 # ================== ОПРЕДЕЛЕНИЕ ВЛАДЕЛЬЦА ==================
 async def get_owner_id(business_connection_id):
-    """Возвращает user_id владельца бизнес-аккаунта для данного подключения."""
     if not business_connection_id:
         return None
     if business_connection_id in business_owners:
@@ -56,14 +58,12 @@ async def get_owner_id(business_connection_id):
         conn = await bot.get_business_connection(business_connection_id)
         owner_id = conn.user.id
         business_owners[business_connection_id] = owner_id
-        logging.info(f"Business owner for {business_connection_id}: {owner_id}")
         return owner_id
     except Exception as e:
         logging.error(f"Не удалось получить владельца: {e}")
         return None
 
 async def is_owner(message: types.Message):
-    """Проверяет, что команду отправил владелец бизнес-аккаунта."""
     owner_id = await get_owner_id(message.business_connection_id)
     if owner_id is None:
         return False
@@ -83,18 +83,40 @@ def back_kb():
         [types.InlineKeyboardButton(text="🔙 В меню", callback_data="back_main")]
     ])
 
-# ================== МЕНЮ (ЛС с ботом) ==================
+# ================== МЕНЮ С БАННЕРОМ ==================
 @dp.message(F.text == "/start")
 async def start_cmd(message: types.Message):
-    await message.answer("🏠 *Главное меню*\n\nВыбери 👇", parse_mode="Markdown", reply_markup=main_menu())
+    try:
+        await message.answer_photo(
+            photo=types.FSInputFile(BANNER_PATH),
+            caption="🏠 *Главное меню*\n\nВыбери, что тебя интересует 👇",
+            parse_mode="Markdown",
+            reply_markup=main_menu()
+        )
+    except Exception as e:
+        logging.error(f"Не смог отправить баннер: {e}")
+        await message.answer("🏠 *Главное меню*\n\nВыбери 👇", parse_mode="Markdown", reply_markup=main_menu())
 
 @dp.callback_query(F.data == "back_main")
 async def cb_back(call: types.CallbackQuery):
-    await call.message.edit_text("🏠 *Главное меню*\n\nВыбери 👇", parse_mode="Markdown", reply_markup=main_menu())
+    try:
+        await call.message.delete()
+    except:
+        pass
+    try:
+        await call.message.answer_photo(
+            photo=types.FSInputFile(BANNER_PATH),
+            caption="🏠 *Главное меню*\n\nВыбери, что тебя интересует 👇",
+            parse_mode="Markdown",
+            reply_markup=main_menu()
+        )
+    except Exception as e:
+        logging.error(f"Не смог отправить баннер: {e}")
+        await call.message.answer("🏠 *Главное меню*\n\nВыбери 👇", parse_mode="Markdown", reply_markup=main_menu())
 
 @dp.callback_query(F.data == "cmd_list")
 async def cb_cmds(call: types.CallbackQuery):
-    await call.message.edit_text(
+    await call.message.answer(
         "📖 *Команды:*\n\n"
         "`.mute N` — замутить на N минут\n"
         "`.unmute` — снять мут\n"
@@ -110,7 +132,7 @@ async def cb_sub(call: types.CallbackQuery):
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text=f"{v['label']} — {v['rub']}₽/{v['stars']}⭐", callback_data=f"pay_{k}")] for k, v in PRICES.items()
     ] + [[types.InlineKeyboardButton(text="🔙 В меню", callback_data="back_main")]])
-    await call.message.edit_text("💎 *Подписка*\n\n🎁 Пробный период 7 дней!\nВыбери тариф 👇", parse_mode="Markdown", reply_markup=kb)
+    await call.message.answer("💎 *Подписка*\n\n🎁 Пробный период 7 дней!\nВыбери тариф 👇", parse_mode="Markdown", reply_markup=kb)
 
 @dp.callback_query(F.data.startswith("pay_"))
 async def cb_pay(call: types.CallbackQuery):
@@ -120,7 +142,7 @@ async def cb_pay(call: types.CallbackQuery):
         [types.InlineKeyboardButton(text="⭐ Звёздами", callback_data=f"stars_{plan}")],
         [types.InlineKeyboardButton(text="💳 Карта", callback_data=f"card_{plan}")],
         [types.InlineKeyboardButton(text="🔙 Назад", callback_data="sub_menu")]])
-    await call.message.edit_text(f"💳 *{p['label']}*\n💰 {p['rub']}₽ или {p['stars']}⭐", parse_mode="Markdown", reply_markup=kb)
+    await call.message.answer(f"💳 *{p['label']}*\n💰 {p['rub']}₽ или {p['stars']}⭐", parse_mode="Markdown", reply_markup=kb)
 
 @dp.callback_query(F.data.startswith("card_"))
 async def cb_card(call: types.CallbackQuery):
@@ -142,13 +164,13 @@ async def cb_stars(call: types.CallbackQuery):
 async def cb_ref(call: types.CallbackQuery):
     uname = bot.username or "my_bot"
     link = f"https://t.me/{uname}?start=ref_{call.from_user.id}"
-    await call.message.edit_text(f"👥 *Рефералка*\n🔗 `{link}`", parse_mode="Markdown", reply_markup=back_kb())
+    await call.message.answer(f"👥 *Рефералка*\n🔗 `{link}`", parse_mode="Markdown", reply_markup=back_kb())
 
 @dp.callback_query(F.data == "howto")
 async def cb_howto(call: types.CallbackQuery):
-    await call.message.edit_text("📚 Настройки → Аккаунт → Автоматизация чатов → Подключить бота", reply_markup=back_kb())
+    await call.message.answer("📚 Настройки → Аккаунт → Автоматизация чатов → Подключить бота", reply_markup=back_kb())
 
-# ================== BUSINESS КОМАНДЫ (только владелец) ==================
+# ================== BUSINESS КОМАНДЫ ==================
 @dp.business_message(F.text.startswith(".mute"))
 async def b_mute(message: types.Message):
     if not await is_owner(message):
@@ -225,7 +247,6 @@ async def b_default(message: types.Message):
     owner_id = await get_owner_id(message.business_connection_id)
     msg_from = message.from_user.id if message.from_user else 0
 
-    # Мут — удаляем сообщения собеседника
     if t in mutes and mutes[t] > datetime.now():
         if msg_from != owner_id:
             try:
@@ -237,12 +258,10 @@ async def b_default(message: types.Message):
                 logging.error(f"Ошибка удаления: {e}")
             return
 
-    # Мут истёк — сброс
     if t in mutes and mutes[t] <= datetime.now():
         mutes.pop(t, None)
         warns.pop(t, None)
 
-    # Автоповтор
     if clone.get(t) and message.text and msg_from != owner_id:
         await message.answer(message.text)
 
