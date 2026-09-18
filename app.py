@@ -13,7 +13,6 @@ from aiogram.types import LabeledPrice
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8632065717:AAEYC3ciYv-W7PHzMrWFaX7FyRYNlZJ5_rE")
 CARD_NUMBER = "2204320449407461"
 OWNER_USERNAME = "ysorn"
-OWNER_USER_ID = 8502858396
 
 PRICES = {
     "1month": {"rub": 100, "stars": 50, "days": 30, "label": "1 месяц"},
@@ -22,6 +21,9 @@ PRICES = {
 }
 WARN_LIMIT = 5
 WARN_MUTE_MINUTES = 5
+
+# Кэш: business_connection_id -> owner_user_id
+business_owners = {}
 
 # ================== FLASK (для Render) ==================
 flask_app = Flask(__name__)
@@ -43,6 +45,30 @@ warns = {}
 mutes = {}
 clone = {}
 
+# ================== ОПРЕДЕЛЕНИЕ ВЛАДЕЛЬЦА ==================
+async def get_owner_id(business_connection_id):
+    """Возвращает user_id владельца бизнес-аккаунта для данного подключения."""
+    if not business_connection_id:
+        return None
+    if business_connection_id in business_owners:
+        return business_owners[business_connection_id]
+    try:
+        conn = await bot.get_business_connection(business_connection_id)
+        owner_id = conn.user.id
+        business_owners[business_connection_id] = owner_id
+        logging.info(f"Business owner for {business_connection_id}: {owner_id}")
+        return owner_id
+    except Exception as e:
+        logging.error(f"Не удалось получить владельца: {e}")
+        return None
+
+async def is_owner(message: types.Message):
+    """Проверяет, что команду отправил владелец бизнес-аккаунта."""
+    owner_id = await get_owner_id(message.business_connection_id)
+    if owner_id is None:
+        return False
+    return message.from_user.id == owner_id
+
 # ================== КЛАВИАТУРЫ ==================
 def main_menu():
     return types.InlineKeyboardMarkup(inline_keyboard=[
@@ -57,7 +83,7 @@ def back_kb():
         [types.InlineKeyboardButton(text="🔙 В меню", callback_data="back_main")]
     ])
 
-# ================== МЕНЮ ==================
+# ================== МЕНЮ (ЛС с ботом) ==================
 @dp.message(F.text == "/start")
 async def start_cmd(message: types.Message):
     await message.answer("🏠 *Главное меню*\n\nВыбери 👇", parse_mode="Markdown", reply_markup=main_menu())
@@ -122,10 +148,10 @@ async def cb_ref(call: types.CallbackQuery):
 async def cb_howto(call: types.CallbackQuery):
     await call.message.edit_text("📚 Настройки → Аккаунт → Автоматизация чатов → Подключить бота", reply_markup=back_kb())
 
-# ================== BUSINESS КОМАНДЫ (только для владельца) ==================
+# ================== BUSINESS КОМАНДЫ (только владелец) ==================
 @dp.business_message(F.text.startswith(".mute"))
 async def b_mute(message: types.Message):
-    if message.from_user.id != OWNER_USER_ID:
+    if not await is_owner(message):
         return
     parts = message.text.split()
     m = int(parts[1]) if len(parts) > 1 else 10
@@ -134,14 +160,14 @@ async def b_mute(message: types.Message):
 
 @dp.business_message(F.text.startswith(".unmute"))
 async def b_unmute(message: types.Message):
-    if message.from_user.id != OWNER_USER_ID:
+    if not await is_owner(message):
         return
     mutes.pop(message.chat.id, None)
     await message.answer("🔊 Мут снят")
 
 @dp.business_message(F.text.startswith(".warn"))
 async def b_warn(message: types.Message):
-    if message.from_user.id != OWNER_USER_ID:
+    if not await is_owner(message):
         return
     parts = message.text.split()
     n = int(parts[1]) if len(parts) > 1 else 1
@@ -153,7 +179,7 @@ async def b_warn(message: types.Message):
 
 @dp.business_message(F.text.startswith(".unwarn"))
 async def b_unwarn(message: types.Message):
-    if message.from_user.id != OWNER_USER_ID:
+    if not await is_owner(message):
         return
     warns.pop(message.chat.id, None)
     mutes.pop(message.chat.id, None)
@@ -161,7 +187,7 @@ async def b_unwarn(message: types.Message):
 
 @dp.business_message(F.text.startswith(".spam"))
 async def b_spam(message: types.Message):
-    if message.from_user.id != OWNER_USER_ID:
+    if not await is_owner(message):
         return
     parts = message.text.split(maxsplit=2)
     if len(parts) < 3:
@@ -176,7 +202,7 @@ async def b_spam(message: types.Message):
 
 @dp.business_message(F.text.startswith(".clone"))
 async def b_clone(message: types.Message):
-    if message.from_user.id != OWNER_USER_ID:
+    if not await is_owner(message):
         return
     parts = message.text.split()
     state = parts[1].lower() if len(parts) > 1 else "on"
@@ -185,7 +211,7 @@ async def b_clone(message: types.Message):
 
 @dp.business_message(F.text.startswith(".st"))
 async def b_st(message: types.Message):
-    if message.from_user.id != OWNER_USER_ID:
+    if not await is_owner(message):
         return
     text = message.text.replace(".st", "", 1).strip()
     if text:
@@ -196,11 +222,12 @@ async def b_st(message: types.Message):
 @dp.business_message()
 async def b_default(message: types.Message):
     t = message.chat.id
+    owner_id = await get_owner_id(message.business_connection_id)
     msg_from = message.from_user.id if message.from_user else 0
 
     # Мут — удаляем сообщения собеседника
     if t in mutes and mutes[t] > datetime.now():
-        if msg_from != OWNER_USER_ID:
+        if msg_from != owner_id:
             try:
                 await bot(DeleteBusinessMessages(
                     business_connection_id=message.business_connection_id,
@@ -216,7 +243,7 @@ async def b_default(message: types.Message):
         warns.pop(t, None)
 
     # Автоповтор
-    if clone.get(t) and message.text and msg_from != OWNER_USER_ID:
+    if clone.get(t) and message.text and msg_from != owner_id:
         await message.answer(message.text)
 
 # ================== ЗАПУСК ==================
