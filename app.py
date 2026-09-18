@@ -14,6 +14,9 @@ CARD_NUMBER = "2204320449407461"
 OWNER_USERNAME = "ysorn"
 OWNER_ID = 8502858396
 
+CHANNEL_LINK = "https://t.me/+MV9rTn9A6L1hNGNi"
+CHANNEL_ID = -1004412177691
+
 PRICES = {
     "1month": {"rub": 100, "days": 30, "label": "1 месяц"},
     "6months": {"rub": 599, "days": 180, "label": "6 месяцев"},
@@ -24,10 +27,9 @@ WARN_MUTE_MINUTES = 5
 
 BANNER_PATH = os.path.join(os.path.dirname(__file__), "IMG_20260918_155302_695.jpg")
 
-# Хранилища
 business_owners = {}
 subscriptions = {}
-pending_payments = {}  # user_id -> {"plan": "1month"}
+pending_payments = {}
 
 # ================== FLASK ==================
 flask_app = Flask(__name__)
@@ -48,6 +50,21 @@ dp = Dispatcher(storage=MemoryStorage())
 warns = {}
 mutes = {}
 clone = {}
+
+# ================== ПРОВЕРКА ПОДПИСКИ ==================
+async def check_subscription(user_id):
+    try:
+        member = await bot.get_chat_member(CHANNEL_ID, user_id)
+        return member.status not in ("left", "kicked")
+    except Exception as e:
+        logging.error(f"Ошибка проверки подписки: {e}")
+        return True  # если ошибка — не блокируем
+
+def subscribe_kb():
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="📢 Подписаться на канал", url=CHANNEL_LINK)],
+        [types.InlineKeyboardButton(text="✅ Я подписался", callback_data="check_sub")],
+    ])
 
 # ================== ВЛАДЕЛЕЦ ==================
 async def get_owner_id(business_connection_id):
@@ -86,9 +103,21 @@ def plans_kb():
         [types.InlineKeyboardButton(text=f"{v['label']} — {v['rub']}₽", callback_data=f"pay_{k}")] for k, v in PRICES.items()
     ] + [[types.InlineKeyboardButton(text="🔙 Назад", callback_data="back_main")]])
 
-# ================== МЕНЮ ==================
+# ================== /START ==================
 @dp.message(F.text == "/start")
 async def start_cmd(message: types.Message):
+    user_id = message.from_user.id
+
+    # Проверка подписки на канал
+    if not await check_subscription(user_id):
+        await message.answer(
+            "⚠️ *Для использования бота нужно подписаться на наш канал.*\n\n"
+            "📢 Подпишись и нажми «✅ Я подписался».",
+            parse_mode="Markdown",
+            reply_markup=subscribe_kb()
+        )
+        return
+
     try:
         await message.answer_photo(
             photo=types.FSInputFile(BANNER_PATH),
@@ -99,6 +128,25 @@ async def start_cmd(message: types.Message):
     except Exception as e:
         logging.error(f"Баннер: {e}")
         await message.answer("🏠 *Главное меню*\n\nВыбери 👇", parse_mode="Markdown", reply_markup=main_menu())
+
+@dp.callback_query(F.data == "check_sub")
+async def cb_check_sub(call: types.CallbackQuery):
+    if await check_subscription(call.from_user.id):
+        try:
+            await call.message.delete()
+        except:
+            pass
+        try:
+            await call.message.answer_photo(
+                photo=types.FSInputFile(BANNER_PATH),
+                caption="🏠 *Главное меню*\n\nВыбери 👇",
+                parse_mode="Markdown",
+                reply_markup=main_menu()
+            )
+        except:
+            await call.message.answer("🏠 *Главное меню*\n\nВыбери 👇", parse_mode="Markdown", reply_markup=main_menu())
+    else:
+        await call.answer("❌ Ты ещё не подписался на канал!", show_alert=True)
 
 @dp.callback_query(F.data == "back_main")
 async def cb_back(call: types.CallbackQuery):
@@ -152,7 +200,7 @@ async def cb_paid(call: types.CallbackQuery):
     logging.info(f"Ожидаю скриншот от {call.from_user.id}, тариф {plan}")
     await call.message.answer("📸 Пришли скриншот оплаты одним сообщением-фото.")
 
-# ================== ПРИЁМ СКРИНШОТА (в ЛС с ботом) ==================
+# ================== ПРИЁМ СКРИНШОТА ==================
 @dp.message(F.photo)
 async def on_screenshot(message: types.Message):
     user_id = message.from_user.id
