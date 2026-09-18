@@ -9,6 +9,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.methods import DeleteBusinessMessages
 from aiogram.types import LabeledPrice
 
+# ================== НАСТРОЙКИ ==================
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8632065717:AAEYC3ciYv-W7PHzMrWFaX7FyRYNlZJ5_rE")
 CARD_NUMBER = "2204320449407461"
 OWNER_USERNAME = "ysorn"
@@ -22,6 +23,7 @@ PRICES = {
 WARN_LIMIT = 5
 WARN_MUTE_MINUTES = 5
 
+# ================== FLASK (для Render) ==================
 flask_app = Flask(__name__)
 
 @flask_app.route('/')
@@ -32,13 +34,16 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     flask_app.run(host='0.0.0.0', port=port)
 
+# ================== ИНИЦИАЛИЗАЦИЯ ==================
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
 warns = {}
 mutes = {}
+clone = {}
 
+# ================== КЛАВИАТУРЫ ==================
 def main_menu():
     return types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="📖 Команды бота", callback_data="cmd_list")],
@@ -52,6 +57,7 @@ def back_kb():
         [types.InlineKeyboardButton(text="🔙 В меню", callback_data="back_main")]
     ])
 
+# ================== МЕНЮ ==================
 @dp.message(F.text == "/start")
 async def start_cmd(message: types.Message):
     await message.answer("🏠 *Главное меню*\n\nВыбери 👇", parse_mode="Markdown", reply_markup=main_menu())
@@ -62,14 +68,23 @@ async def cb_back(call: types.CallbackQuery):
 
 @dp.callback_query(F.data == "cmd_list")
 async def cb_cmds(call: types.CallbackQuery):
-    await call.message.edit_text("📖 *Команды:*\n\n`.mute N`\n`.unmute`\n`.warn N`\n`.unwarn`\n`.spam N текст`\n`.st текст`\n`.clone on/off`", parse_mode="Markdown", reply_markup=back_kb())
+    await call.message.edit_text(
+        "📖 *Команды:*\n\n"
+        "`.mute N` — замутить на N минут\n"
+        "`.unmute` — снять мут\n"
+        "`.warn N` — предупреждения\n"
+        "`.unwarn` — сбросить\n"
+        "`.spam N текст` — отправить N раз\n"
+        "`.st текст` — по словам\n"
+        "`.clone on/off` — автоповтор",
+        parse_mode="Markdown", reply_markup=back_kb())
 
 @dp.callback_query(F.data == "sub_menu")
 async def cb_sub(call: types.CallbackQuery):
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text=f"{v['label']} — {v['rub']}₽/{v['stars']}⭐", callback_data=f"pay_{k}")] for k, v in PRICES.items()
     ] + [[types.InlineKeyboardButton(text="🔙 В меню", callback_data="back_main")]])
-    await call.message.edit_text("💎 *Подписка*\n\nВыбери тариф 👇", parse_mode="Markdown", reply_markup=kb)
+    await call.message.edit_text("💎 *Подписка*\n\n🎁 Пробный период 7 дней!\nВыбери тариф 👇", parse_mode="Markdown", reply_markup=kb)
 
 @dp.callback_query(F.data.startswith("pay_"))
 async def cb_pay(call: types.CallbackQuery):
@@ -107,8 +122,11 @@ async def cb_ref(call: types.CallbackQuery):
 async def cb_howto(call: types.CallbackQuery):
     await call.message.edit_text("📚 Настройки → Аккаунт → Автоматизация чатов → Подключить бота", reply_markup=back_kb())
 
+# ================== BUSINESS КОМАНДЫ (только для владельца) ==================
 @dp.business_message(F.text.startswith(".mute"))
 async def b_mute(message: types.Message):
+    if message.from_user.id != OWNER_USER_ID:
+        return
     parts = message.text.split()
     m = int(parts[1]) if len(parts) > 1 else 10
     mutes[message.chat.id] = datetime.now() + timedelta(minutes=m)
@@ -116,11 +134,15 @@ async def b_mute(message: types.Message):
 
 @dp.business_message(F.text.startswith(".unmute"))
 async def b_unmute(message: types.Message):
+    if message.from_user.id != OWNER_USER_ID:
+        return
     mutes.pop(message.chat.id, None)
     await message.answer("🔊 Мут снят")
 
 @dp.business_message(F.text.startswith(".warn"))
 async def b_warn(message: types.Message):
+    if message.from_user.id != OWNER_USER_ID:
+        return
     parts = message.text.split()
     n = int(parts[1]) if len(parts) > 1 else 1
     t = message.chat.id
@@ -131,22 +153,73 @@ async def b_warn(message: types.Message):
 
 @dp.business_message(F.text.startswith(".unwarn"))
 async def b_unwarn(message: types.Message):
+    if message.from_user.id != OWNER_USER_ID:
+        return
     warns.pop(message.chat.id, None)
     mutes.pop(message.chat.id, None)
     await message.answer("✅ Сброшено")
 
+@dp.business_message(F.text.startswith(".spam"))
+async def b_spam(message: types.Message):
+    if message.from_user.id != OWNER_USER_ID:
+        return
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 3:
+        await message.answer("Использование: `.spam N текст`")
+        return
+    try:
+        n = min(int(parts[1]), 50)
+    except:
+        n = 1
+    for _ in range(n):
+        await message.answer(parts[2])
+
+@dp.business_message(F.text.startswith(".clone"))
+async def b_clone(message: types.Message):
+    if message.from_user.id != OWNER_USER_ID:
+        return
+    parts = message.text.split()
+    state = parts[1].lower() if len(parts) > 1 else "on"
+    clone[message.chat.id] = (state == "on")
+    await message.answer(f"🔄 Автоповтор {'включён' if state == 'on' else 'выключен'}")
+
+@dp.business_message(F.text.startswith(".st"))
+async def b_st(message: types.Message):
+    if message.from_user.id != OWNER_USER_ID:
+        return
+    text = message.text.replace(".st", "", 1).strip()
+    if text:
+        for word in text.split():
+            await message.answer(word)
+
+# ================== ОБРАБОТКА СООБЩЕНИЙ ==================
 @dp.business_message()
 async def b_default(message: types.Message):
     t = message.chat.id
-    if t in mutes and mutes[t] > datetime.now():
-        if message.from_user.id != OWNER_USER_ID:
-            try:
-                await bot(DeleteBusinessMessages(business_connection_id=message.business_connection_id, message_ids=[message.message_id]))
-            except: pass
-            return
-    if t in mutes and mutes[t] <= datetime.now():
-        mutes.pop(t, None); warns.pop(t, None)
+    msg_from = message.from_user.id if message.from_user else 0
 
+    # Мут — удаляем сообщения собеседника
+    if t in mutes and mutes[t] > datetime.now():
+        if msg_from != OWNER_USER_ID:
+            try:
+                await bot(DeleteBusinessMessages(
+                    business_connection_id=message.business_connection_id,
+                    message_ids=[message.message_id],
+                ))
+            except Exception as e:
+                logging.error(f"Ошибка удаления: {e}")
+            return
+
+    # Мут истёк — сброс
+    if t in mutes and mutes[t] <= datetime.now():
+        mutes.pop(t, None)
+        warns.pop(t, None)
+
+    # Автоповтор
+    if clone.get(t) and message.text and msg_from != OWNER_USER_ID:
+        await message.answer(message.text)
+
+# ================== ЗАПУСК ==================
 async def main():
     me = await bot.get_me()
     bot.username = me.username
