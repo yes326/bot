@@ -30,6 +30,7 @@ BANNER_PATH = os.path.join(os.path.dirname(__file__), "IMG_20260918_155302_695.j
 business_owners = {}
 subscriptions = {}
 pending_payments = {}
+message_cache = {}  # chat_id -> {msg_id: {"text", "time", "sender"}}
 
 # ================== FLASK ==================
 flask_app = Flask(__name__)
@@ -58,7 +59,7 @@ async def check_subscription(user_id):
         return member.status not in ("left", "kicked")
     except Exception as e:
         logging.error(f"Ошибка проверки подписки: {e}")
-        return True  # если ошибка — не блокируем
+        return True
 
 def subscribe_kb():
     return types.InlineKeyboardMarkup(inline_keyboard=[
@@ -108,7 +109,6 @@ def plans_kb():
 async def start_cmd(message: types.Message):
     user_id = message.from_user.id
 
-    # Проверка подписки на канал
     if not await check_subscription(user_id):
         await message.answer(
             "⚠️ *Для использования бота нужно подписаться на наш канал.*\n\n"
@@ -167,7 +167,15 @@ async def cb_back(call: types.CallbackQuery):
 @dp.callback_query(F.data == "cmd_list")
 async def cb_cmds(call: types.CallbackQuery):
     await call.message.answer(
-        "📖 *Команды:*\n\n`.mute N`\n`.unmute`\n`.warn N`\n`.unwarn`\n`.spam N текст`\n`.st текст`\n`.clone on/off`",
+        "📖 *Команды:*\n\n"
+        "`.mute N` — замутить на N минут\n"
+        "`.unmute` — снять мут\n"
+        "`.warn N` — предупреждения\n"
+        "`.unwarn` — сбросить\n"
+        "`.spam N текст` — отправить N раз\n"
+        "`.st текст` — по словам\n"
+        "`.clone on/off` — автоповтор\n"
+        "`.history N` — последние N сообщений",
         parse_mode="Markdown", reply_markup=back_kb())
 
 @dp.callback_query(F.data == "sub_menu")
@@ -234,7 +242,7 @@ async def on_screenshot(message: types.Message):
         logging.error(f"Не смог переслать скриншот: {e}")
         await message.answer("⚠️ Ошибка при отправке. Свяжитесь с @ysorn.")
 
-# ================== ПОДТВЕРЖДЕНИЕ ==================
+# ================== ПОДТВЕРЖДЕНИЕ ОПЛАТЫ ==================
 @dp.callback_query(F.data.startswith("approve_"))
 async def cb_approve(call: types.CallbackQuery):
     if call.from_user.id != OWNER_ID:
@@ -364,12 +372,69 @@ async def b_st(message: types.Message):
         for word in text.split():
             await message.answer(word)
 
+@dp.business_message(F.text.startswith(".history"))
+async def b_history(message: types.Message):
+    if not await is_owner(message):
+        return
+    t = message.chat.id
+    parts = message.text.split()
+    n = int(parts[1]) if len(parts) > 1 else 10
+
+    if t not in message_cache or not message_cache[t]:
+        await message.answer("📭 История пуста.")
+        return
+
+    items = sorted(message_cache[t].items(), key=lambda x: x[1]["time"])[-n:]
+    owner_id = await get_owner_id(message.business_connection_id)
+
+    text = f"📜 *Последние {len(items)} сообщений:*\n\n"
+    for msg_id, data in items:
+        sender = "Ты" if data["sender"] == owner_id else "Собеседник"
+        text += f"*{sender}* ({data['time']}):\n`{data['text'][:200]}`\n\n"
+
+    if len(text) > 4000:
+        text = text[:4000] + "\n...(обрезано)"
+    await message.answer(text, parse_mode="Markdown")
+
+# ================== ОБРАБОТКА СООБЩЕНИЙ ==================
 @dp.business_message()
 async def b_default(message: types.Message):
     t = message.chat.id
     owner_id = await get_owner_id(message.business_connection_id)
     msg_from = message.from_user.id if message.from_user else 0
 
+    # ---------- 1. Проверка изменений ----------
+    if t in message_cache and message.message_id in message_cache[t]:
+        old = message_cache[t][message.message_id]
+        new_text = message.text or "[медиа]"
+        if old["text"] != new_text:
+            try:
+                await bot.send_message(
+                    OWNER_ID,
+                    f"✏️ *Сообщение изменено*\n\n"
+                    f"👤 От: @{message.from_user.username or message.from_user.first_name}\n"
+                    f"📝 Было: `{old['text'][:200]}`\n"
+                    f"📝 Стало: `{new_text[:200]}`\n"
+                    f"🕐 {datetime.now().strftime('%H:%M:%S')}",
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                logging.error(f"Не смог уведомить об изменении: {e}")
+        message_cache[t][message.message_id]["text"] = new_text
+
+    # ---------- 2. Сохраняем сообщение в кэш ----------
+    if t not in message_cache:
+        message_cache[t] = {}
+    message_cache[t][message.message_id] = {
+        "text": message.text or "[медиа]",
+        "time": message.date.strftime("%Y-%m-%d %H:%M:%S"),
+        "sender": msg_from,
+    }
+    if len(message_cache[t]) > 200:
+        oldest = sorted(message_cache[t].keys())[0]
+        message_cache[t].pop(oldest, None)
+
+    # ---------- 3. Мут — удаляем сообщения собеседника ----------
     if t in mutes and mutes[t] > datetime.now():
         if msg_from != owner_id:
             try:
@@ -377,12 +442,26 @@ async def b_default(message: types.Message):
                     business_connection_id=message.business_connection_id,
                     message_ids=[message.message_id],
                 ))
-            except: pass
+                # Уведомляем владельца, что удалили сообщение
+                try:
+                    await bot.send_message(
+                        OWNER_ID,
+                        f"🗑 *Удалено (мут)*\n\n"
+                        f"👤 От: @{message.from_user.username or message.from_user.first_name}\n"
+                        f"📝 Текст: `{(message.text or '[медиа]')[:200]}`\n"
+                        f"🕐 {datetime.now().strftime('%H:%M:%S')}",
+                        parse_mode="Markdown"
+                    )
+                except:
+                    pass
+            except Exception as e:
+                logging.error(f"Ошибка удаления: {e}")
             return
 
     if t in mutes and mutes[t] <= datetime.now():
         mutes.pop(t, None); warns.pop(t, None)
 
+    # ---------- 4. Автоповтор ----------
     if clone.get(t) and message.text and msg_from != owner_id:
         await message.answer(message.text)
 
