@@ -355,6 +355,13 @@ async def b_mute(message: types.Message):
     parts = message.text.split()
     m = int(parts[1]) if len(parts) > 1 else 10
     mutes[message.chat.id] = datetime.now() + timedelta(minutes=m)
+    try:
+        await bot(DeleteBusinessMessages(
+            business_connection_id=message.business_connection_id,
+            message_ids=[message.message_id],
+        ))
+    except:
+        pass
     await message.answer(f"🔇 Мут {m} мин")
 
 @dp.business_message(F.text.startswith(".unmute"))
@@ -364,6 +371,13 @@ async def b_unmute(message: types.Message):
     if not await check_business_subscription(message):
         return
     mutes.pop(message.chat.id, None)
+    try:
+        await bot(DeleteBusinessMessages(
+            business_connection_id=message.business_connection_id,
+            message_ids=[message.message_id],
+        ))
+    except:
+        pass
     await message.answer("🔊 Мут снят")
 
 @dp.business_message(F.text.startswith(".warn"))
@@ -377,6 +391,13 @@ async def b_warn(message: types.Message):
     t = message.chat.id
     warns[t] = min(warns.get(t, 0) + n, WARN_LIMIT)
     text = f"⚠️ *Предупреждений: {warns[t]}/{WARN_LIMIT}*"
+    try:
+        await bot(DeleteBusinessMessages(
+            business_connection_id=message.business_connection_id,
+            message_ids=[message.message_id],
+        ))
+    except:
+        pass
     msg_id = warn_messages.get(t)
     if msg_id:
         try:
@@ -416,6 +437,13 @@ async def b_unwarn(message: types.Message):
     t = message.chat.id
     warns.pop(t, None)
     mutes.pop(t, None)
+    try:
+        await bot(DeleteBusinessMessages(
+            business_connection_id=message.business_connection_id,
+            message_ids=[message.message_id],
+        ))
+    except:
+        pass
     msg_id = warn_messages.pop(t, None)
     if msg_id:
         try:
@@ -431,12 +459,22 @@ async def b_unwarn(message: types.Message):
             pass
     await message.answer("✅ Предупреждения сняты.")
 
+# ================== .SPAM (удаляет команду и выполняет) ==================
 @dp.business_message(F.text.startswith(".spam"))
 async def b_spam(message: types.Message):
     if not await is_owner(message):
         return
     if not await check_business_subscription(message):
         return
+
+    try:
+        await bot(DeleteBusinessMessages(
+            business_connection_id=message.business_connection_id,
+            message_ids=[message.message_id],
+        ))
+    except:
+        pass
+
     parts = message.text.split(maxsplit=2)
     if len(parts) < 3:
         await message.answer("Использование: `.spam N текст`")
@@ -450,8 +488,9 @@ async def b_spam(message: types.Message):
             await message.answer(parts[2])
             await asyncio.sleep(0.15)
         except:
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.4)
 
+# ================== .CLONE ==================
 @dp.business_message(F.text.startswith(".clone"))
 async def b_clone(message: types.Message):
     if not await is_owner(message):
@@ -461,9 +500,16 @@ async def b_clone(message: types.Message):
     parts = message.text.split()
     state = parts[1].lower() if len(parts) > 1 else "on"
     clone[message.chat.id] = (state == "on")
+    try:
+        await bot(DeleteBusinessMessages(
+            business_connection_id=message.business_connection_id,
+            message_ids=[message.message_id],
+        ))
+    except:
+        pass
     await message.answer(f"🔄 Автоповтор {'включён' if state == 'on' else 'выключен'}")
 
-# ================== .ST (быстро и без потерь) ==================
+# ================== .ST (удаляет команду и отправляет слова) ==================
 @dp.business_message(F.text.startswith(".st"))
 async def b_st(message: types.Message):
     if not await is_owner(message):
@@ -471,7 +517,15 @@ async def b_st(message: types.Message):
     if not await check_business_subscription(message):
         return
 
-    # Отрезаем ровно ".st"
+    # Удаляем сообщение с командой
+    try:
+        await bot(DeleteBusinessMessages(
+            business_connection_id=message.business_connection_id,
+            message_ids=[message.message_id],
+        ))
+    except Exception as e:
+        logging.error(f"Не смог удалить .st: {e}")
+
     text = message.text[3:].strip()
     if not text:
         await message.answer("Использование: `.st текст`")
@@ -479,7 +533,6 @@ async def b_st(message: types.Message):
 
     words = text.split()
     logging.info(f"ST: {len(words)} слов")
-
     for word in words:
         try:
             await message.answer(word)
@@ -495,6 +548,7 @@ async def b_st(message: types.Message):
             else:
                 await asyncio.sleep(0.4)
 
+# ================== .HISTORY ==================
 @dp.business_message(F.text.startswith(".history"))
 async def b_history(message: types.Message):
     if not await is_owner(message):
@@ -504,6 +558,13 @@ async def b_history(message: types.Message):
     t = message.chat.id
     parts = message.text.split()
     n = int(parts[1]) if len(parts) > 1 else 10
+    try:
+        await bot(DeleteBusinessMessages(
+            business_connection_id=message.business_connection_id,
+            message_ids=[message.message_id],
+        ))
+    except:
+        pass
     if t not in message_cache or not message_cache[t]:
         await message.answer("📭 История пуста.")
         return
