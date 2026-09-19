@@ -89,6 +89,22 @@ async def is_owner(message: types.Message):
     owner_id = await get_owner_id(message.business_connection_id)
     return owner_id is not None and message.from_user.id == owner_id
 
+async def check_business_subscription(message: types.Message):
+    """Проверяет, подписан ли владелец бизнес-аккаунта на канал."""
+    owner_id = await get_owner_id(message.business_connection_id)
+    if owner_id is None:
+        return False
+    if not await check_subscription(owner_id):
+        try:
+            await message.answer(
+                f"⚠️ *Для использования бота подпишись на канал:*\n{CHANNEL_LINK}",
+                parse_mode="Markdown"
+            )
+        except:
+            pass
+        return False
+    return True
+
 # ================== КЛАВИАТУРЫ ==================
 def main_menu():
     return types.InlineKeyboardMarkup(inline_keyboard=[
@@ -335,6 +351,8 @@ async def cb_howto(call: types.CallbackQuery):
 async def b_mute(message: types.Message):
     if not await is_owner(message):
         return
+    if not await check_business_subscription(message):
+        return
     parts = message.text.split()
     m = int(parts[1]) if len(parts) > 1 else 10
     mutes[message.chat.id] = datetime.now() + timedelta(minutes=m)
@@ -344,20 +362,22 @@ async def b_mute(message: types.Message):
 async def b_unmute(message: types.Message):
     if not await is_owner(message):
         return
+    if not await check_business_subscription(message):
+        return
     mutes.pop(message.chat.id, None)
     await message.answer("🔊 Мут снят")
 
-# ================== .WARN (с EditMessageText) ==================
 @dp.business_message(F.text.startswith(".warn"))
 async def b_warn(message: types.Message):
     if not await is_owner(message):
+        return
+    if not await check_business_subscription(message):
         return
     parts = message.text.split()
     n = int(parts[1]) if len(parts) > 1 else 1
     t = message.chat.id
     warns[t] = min(warns.get(t, 0) + n, WARN_LIMIT)
     text = f"⚠️ *Предупреждений: {warns[t]}/{WARN_LIMIT}*"
-
     msg_id = warn_messages.get(t)
     if msg_id:
         try:
@@ -375,7 +395,6 @@ async def b_warn(message: types.Message):
     else:
         new_msg = await message.answer(text, parse_mode="Markdown")
         warn_messages[t] = new_msg.message_id
-
     if warns[t] >= WARN_LIMIT:
         mutes[t] = datetime.now() + timedelta(minutes=WARN_MUTE_MINUTES)
         try:
@@ -392,6 +411,8 @@ async def b_warn(message: types.Message):
 @dp.business_message(F.text.startswith(".unwarn"))
 async def b_unwarn(message: types.Message):
     if not await is_owner(message):
+        return
+    if not await check_business_subscription(message):
         return
     t = message.chat.id
     warns.pop(t, None)
@@ -411,10 +432,11 @@ async def b_unwarn(message: types.Message):
             pass
     await message.answer("✅ Предупреждения сняты.")
 
-# ================== .SPAM ==================
 @dp.business_message(F.text.startswith(".spam"))
 async def b_spam(message: types.Message):
     if not await is_owner(message):
+        return
+    if not await check_business_subscription(message):
         return
     parts = message.text.split(maxsplit=2)
     if len(parts) < 3:
@@ -427,22 +449,23 @@ async def b_spam(message: types.Message):
     for _ in range(n):
         await message.answer(parts[2])
 
-# ================== .CLONE ==================
 @dp.business_message(F.text.startswith(".clone"))
 async def b_clone(message: types.Message):
     if not await is_owner(message):
+        return
+    if not await check_business_subscription(message):
         return
     parts = message.text.split()
     state = parts[1].lower() if len(parts) > 1 else "on"
     clone[message.chat.id] = (state == "on")
     await message.answer(f"🔄 Автоповтор {'включён' if state == 'on' else 'выключен'}")
 
-# ================== .ST (исправлено) ==================
 @dp.business_message(F.text.startswith(".st"))
 async def b_st(message: types.Message):
     if not await is_owner(message):
         return
-    # Отрезаем ровно 3 символа ".st"
+    if not await check_business_subscription(message):
+        return
     text = message.text[3:].strip()
     if not text:
         await message.answer("Использование: `.st текст`")
@@ -454,10 +477,11 @@ async def b_st(message: types.Message):
         except Exception as e:
             logging.error(f"ST ошибка: {e}")
 
-# ================== .HISTORY ==================
 @dp.business_message(F.text.startswith(".history"))
 async def b_history(message: types.Message):
     if not await is_owner(message):
+        return
+    if not await check_business_subscription(message):
         return
     t = message.chat.id
     parts = message.text.split()
