@@ -90,7 +90,6 @@ async def is_owner(message: types.Message):
     return owner_id is not None and message.from_user.id == owner_id
 
 async def check_business_subscription(message: types.Message):
-    """Проверяет, подписан ли владелец бизнес-аккаунта на канал."""
     owner_id = await get_owner_id(message.business_connection_id)
     if owner_id is None:
         return False
@@ -447,7 +446,11 @@ async def b_spam(message: types.Message):
     except:
         n = 1
     for _ in range(n):
-        await message.answer(parts[2])
+        try:
+            await message.answer(parts[2])
+            await asyncio.sleep(0.15)
+        except:
+            await asyncio.sleep(0.5)
 
 @dp.business_message(F.text.startswith(".clone"))
 async def b_clone(message: types.Message):
@@ -460,22 +463,37 @@ async def b_clone(message: types.Message):
     clone[message.chat.id] = (state == "on")
     await message.answer(f"🔄 Автоповтор {'включён' if state == 'on' else 'выключен'}")
 
+# ================== .ST (быстро и без потерь) ==================
 @dp.business_message(F.text.startswith(".st"))
 async def b_st(message: types.Message):
     if not await is_owner(message):
         return
     if not await check_business_subscription(message):
         return
+
+    # Отрезаем ровно ".st"
     text = message.text[3:].strip()
     if not text:
         await message.answer("Использование: `.st текст`")
         return
-    for word in text.split():
+
+    words = text.split()
+    logging.info(f"ST: {len(words)} слов")
+
+    for word in words:
         try:
             await message.answer(word)
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.15)
         except Exception as e:
             logging.error(f"ST ошибка: {e}")
+            if "retry after" in str(e).lower():
+                await asyncio.sleep(2)
+                try:
+                    await message.answer(word)
+                except:
+                    pass
+            else:
+                await asyncio.sleep(0.4)
 
 @dp.business_message(F.text.startswith(".history"))
 async def b_history(message: types.Message):
@@ -506,7 +524,6 @@ async def b_default(message: types.Message):
     owner_id = await get_owner_id(message.business_connection_id)
     msg_from = message.from_user.id if message.from_user else 0
 
-    # Проверка изменений
     if t in message_cache and message.message_id in message_cache[t]:
         old = message_cache[t][message.message_id]
         new_text = message.text or "[медиа]"
@@ -525,7 +542,6 @@ async def b_default(message: types.Message):
                 pass
         message_cache[t][message.message_id]["text"] = new_text
 
-    # Сохраняем в кэш
     if t not in message_cache:
         message_cache[t] = {}
     message_cache[t][message.message_id] = {
@@ -537,7 +553,6 @@ async def b_default(message: types.Message):
         oldest = sorted(message_cache[t].keys())[0]
         message_cache[t].pop(oldest, None)
 
-    # Мут — удаляем сообщения собеседника
     if t in mutes and mutes[t] > datetime.now():
         if msg_from != owner_id:
             try:
@@ -563,7 +578,6 @@ async def b_default(message: types.Message):
     if t in mutes and mutes[t] <= datetime.now():
         mutes.pop(t, None); warns.pop(t, None)
 
-    # Автоповтор
     if clone.get(t) and message.text and msg_from != owner_id:
         await message.answer(message.text)
 
