@@ -347,6 +347,7 @@ async def b_unmute(message: types.Message):
     mutes.pop(message.chat.id, None)
     await message.answer("🔊 Мут снят")
 
+# ================== .WARN (с EditMessageText) ==================
 @dp.business_message(F.text.startswith(".warn"))
 async def b_warn(message: types.Message):
     if not await is_owner(message):
@@ -356,6 +357,7 @@ async def b_warn(message: types.Message):
     t = message.chat.id
     warns[t] = min(warns.get(t, 0) + n, WARN_LIMIT)
     text = f"⚠️ *Предупреждений: {warns[t]}/{WARN_LIMIT}*"
+
     msg_id = warn_messages.get(t)
     if msg_id:
         try:
@@ -366,12 +368,14 @@ async def b_warn(message: types.Message):
                 text=text,
                 parse_mode="Markdown",
             ))
-        except:
+        except Exception as e:
+            logging.error(f"warn edit error: {e}")
             new_msg = await message.answer(text, parse_mode="Markdown")
             warn_messages[t] = new_msg.message_id
     else:
         new_msg = await message.answer(text, parse_mode="Markdown")
         warn_messages[t] = new_msg.message_id
+
     if warns[t] >= WARN_LIMIT:
         mutes[t] = datetime.now() + timedelta(minutes=WARN_MUTE_MINUTES)
         try:
@@ -407,6 +411,7 @@ async def b_unwarn(message: types.Message):
             pass
     await message.answer("✅ Предупреждения сняты.")
 
+# ================== .SPAM ==================
 @dp.business_message(F.text.startswith(".spam"))
 async def b_spam(message: types.Message):
     if not await is_owner(message):
@@ -422,6 +427,7 @@ async def b_spam(message: types.Message):
     for _ in range(n):
         await message.answer(parts[2])
 
+# ================== .CLONE ==================
 @dp.business_message(F.text.startswith(".clone"))
 async def b_clone(message: types.Message):
     if not await is_owner(message):
@@ -431,15 +437,24 @@ async def b_clone(message: types.Message):
     clone[message.chat.id] = (state == "on")
     await message.answer(f"🔄 Автоповтор {'включён' if state == 'on' else 'выключен'}")
 
+# ================== .ST (исправлено) ==================
 @dp.business_message(F.text.startswith(".st"))
 async def b_st(message: types.Message):
     if not await is_owner(message):
         return
-    text = message.text.replace(".st", "", 1).strip()
-    if text:
-        for word in text.split():
+    # Отрезаем ровно 3 символа ".st"
+    text = message.text[3:].strip()
+    if not text:
+        await message.answer("Использование: `.st текст`")
+        return
+    for word in text.split():
+        try:
             await message.answer(word)
+            await asyncio.sleep(0.5)
+        except Exception as e:
+            logging.error(f"ST ошибка: {e}")
 
+# ================== .HISTORY ==================
 @dp.business_message(F.text.startswith(".history"))
 async def b_history(message: types.Message):
     if not await is_owner(message):
@@ -467,6 +482,7 @@ async def b_default(message: types.Message):
     owner_id = await get_owner_id(message.business_connection_id)
     msg_from = message.from_user.id if message.from_user else 0
 
+    # Проверка изменений
     if t in message_cache and message.message_id in message_cache[t]:
         old = message_cache[t][message.message_id]
         new_text = message.text or "[медиа]"
@@ -485,6 +501,7 @@ async def b_default(message: types.Message):
                 pass
         message_cache[t][message.message_id]["text"] = new_text
 
+    # Сохраняем в кэш
     if t not in message_cache:
         message_cache[t] = {}
     message_cache[t][message.message_id] = {
@@ -496,6 +513,7 @@ async def b_default(message: types.Message):
         oldest = sorted(message_cache[t].keys())[0]
         message_cache[t].pop(oldest, None)
 
+    # Мут — удаляем сообщения собеседника
     if t in mutes and mutes[t] > datetime.now():
         if msg_from != owner_id:
             try:
@@ -521,6 +539,7 @@ async def b_default(message: types.Message):
     if t in mutes and mutes[t] <= datetime.now():
         mutes.pop(t, None); warns.pop(t, None)
 
+    # Автоповтор
     if clone.get(t) and message.text and msg_from != owner_id:
         await message.answer(message.text)
 
