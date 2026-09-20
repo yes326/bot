@@ -36,7 +36,6 @@ used_trials = set()
 message_cache = {}
 silent_mode = {}
 
-# ================== FLASK ==================
 flask_app = Flask(__name__)
 
 @flask_app.route('/')
@@ -47,7 +46,6 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     flask_app.run(host='0.0.0.0', port=port)
 
-# ================== ИНИЦИАЛИЗАЦИЯ ==================
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
@@ -58,7 +56,6 @@ clone = {}
 warn_messages = {}
 stats = {}
 
-# ================== ПРОВЕРКА ПОДПИСКИ ==================
 async def check_subscription(user_id):
     try:
         member = await bot.get_chat_member(CHANNEL_ID, user_id)
@@ -73,7 +70,6 @@ def subscribe_kb():
         [types.InlineKeyboardButton(text="✅ Я подписался", callback_data="check_sub")],
     ])
 
-# ================== ВЛАДЕЛЕЦ ==================
 async def get_owner_id(business_connection_id):
     if not business_connection_id:
         return None
@@ -88,7 +84,6 @@ async def get_owner_id(business_connection_id):
         return None
 
 async def is_owner(message: types.Message):
-    """Проверяет, что команду отправил ВЛАДЕЛЕЦ этого бизнес-аккаунта."""
     owner_id = await get_owner_id(message.business_connection_id)
     return owner_id is not None and message.from_user.id == owner_id
 
@@ -112,11 +107,7 @@ def get_stats(chat_id):
         stats[chat_id] = {"deleted": 0, "warns": 0, "mutes": 0}
     return stats[chat_id]
 
-def delete_cmd_kb(chat_id, msg_id):
-    return types.InlineKeyboardMarkup(inline_keyboard=[])
-
 async def try_delete(message: types.Message):
-    """Удаляет сообщение-команду из чата."""
     try:
         await bot(DeleteBusinessMessages(
             business_connection_id=message.business_connection_id,
@@ -125,7 +116,6 @@ async def try_delete(message: types.Message):
     except:
         pass
 
-# ================== КЛАВИАТУРЫ ==================
 def main_menu():
     return types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="📖 Команды бота", callback_data="cmd_list")],
@@ -147,8 +137,7 @@ def plans_kb(user_id=None):
         rows.append([types.InlineKeyboardButton(text=f"{v['label']} — {v['rub']}₽", callback_data=f"pay_{k}")])
     rows.append([types.InlineKeyboardButton(text="🔙 Назад", callback_data="back_main")])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
-    # ================== /START ==================
-@dp.message(F.text == "/start")
+    @dp.message(F.text == "/start")
 async def start_cmd(message: types.Message):
     user_id = message.from_user.id
     if not await check_subscription(user_id):
@@ -385,11 +374,7 @@ async def forward_to_owner(message: types.Message):
         )
     except Exception as e:
         logging.error(f"Не смог переслать ЛС: {e}")
-        # ================== BUSINESS КОМАНДЫ ==================
-# ВАЖНО: во всех командах теперь есть проверка is_owner,
-# чтобы команды НЕ выполнялись у двух ботов одновременно.
-
-@dp.business_message(F.text.startswith(".mute"))
+        @dp.business_message(F.text.startswith(".mute"))
 async def b_mute(message: types.Message):
     if not await is_owner(message):
         return
@@ -544,8 +529,8 @@ async def b_pin(message: types.Message):
         try:
             await bot.pin_chat_message(chat_id=message.chat.id, message_id=reply.message_id)
             await message.answer("📌 Закреплено")
-        except Exception as e:
-            await message.answer(f"⚠️ Не смог закрепить")
+        except:
+            await message.answer("⚠️ Не смог закрепить")
     await try_delete(message)
 
 @dp.business_message(F.text.startswith(".spam"))
@@ -684,7 +669,7 @@ async def b_silent(message: types.Message):
     silent_mode[message.chat.id] = (state == "on")
     await try_delete(message)
     if state == "off":
-        await message.answer(f"🔊 Тихий режим выключен")
+        await message.answer("🔊 Тихий режим выключен")
 
 @dp.business_message(F.text == ".stats")
 async def b_stats(message: types.Message):
@@ -695,9 +680,9 @@ async def b_stats(message: types.Message):
     t = message.chat.id
     s = get_stats(t)
     text = (
-        f"📊 *Статистика чата*\n\n"
+        f"📊 *Статистика*\n\n"
         f"👤 Собеседник: `{t}`\n"
-        f"⚠️ Предупреждений: *{warns.get(t, 0)}/{WARN_LIMIT}*\n"
+        f"⚠️ Варнов: *{warns.get(t, 0)}/{WARN_LIMIT}*\n"
         f"🔇 Мут: *{'да' if t in mutes else 'нет'}*\n"
         f"🗑 Удалено: *{s['deleted']}*\n"
         f"⚠️ Варнов выдано: *{s['warns']}*\n"
@@ -715,11 +700,11 @@ async def b_info(message: types.Message):
     owner_id = await get_owner_id(message.business_connection_id)
     t = message.chat.id
     text = (
-        f"👤 *Информация о собеседнике*\n\n"
+        f"👤 *Инфо*\n\n"
         f"🆔 ID: `{t}`\n"
         f"👤 Владелец: `{owner_id}`\n"
-        f"📅 В кэше сообщений: *{len(message_cache.get(t, {}))}*\n"
-        f"🤖 Юзернейм: @{message.from_user.username or 'не установлен'}"
+        f"📅 В кэше: *{len(message_cache.get(t, {}))}*\n"
+        f"🤖 @{message.from_user.username or '—'}"
     )
     await try_delete(message)
     await message.answer(text, parse_mode="Markdown")
@@ -739,26 +724,23 @@ async def b_history(message: types.Message):
         return
     items = sorted(message_cache[t].items(), key=lambda x: x[1]["time"])[-n:]
     owner_id = await get_owner_id(message.business_connection_id)
-    text = f"📜 *Последние {len(items)} сообщений:*\n\n"
+    text = f"📜 *Последние {len(items)}:*\n\n"
     for msg_id, data in items:
         sender = "Ты" if data["sender"] == owner_id else "Собеседник"
         text += f"*{sender}* ({data['time']}):\n`{data['text'][:200]}`\n\n"
     if len(text) > 4000:
-        text = text[:4000] + "\n...(обрезано)"
+        text = text[:4000] + "\n..."
     await message.answer(text, parse_mode="Markdown")
 
-# ================== ОБРАБОТКА ВСЕХ БИЗНЕС-СООБЩЕНИЙ ==================
 @dp.business_message()
 async def b_default(message: types.Message):
     t = message.chat.id
     owner_id = await get_owner_id(message.business_connection_id)
     msg_from = message.from_user.id if message.from_user else 0
 
-    # Игнорируем команды от НЕ владельца (защита от двойного выполнения)
     if message.text and message.text.startswith(".") and msg_from != owner_id:
         return
 
-    # Тихий режим — владелец молчит
     if silent_mode.get(t) and msg_from == owner_id:
         return
 
@@ -769,11 +751,10 @@ async def b_default(message: types.Message):
             try:
                 await bot.send_message(
                     owner_id,
-                    f"✏️ *Сообщение изменено*\n\n"
-                    f"👤 От: @{message.from_user.username or message.from_user.first_name}\n"
+                    f"✏️ *Изменено*\n\n"
+                    f"👤 @{message.from_user.username or message.from_user.first_name}\n"
                     f"📝 Было: `{old['text'][:200]}`\n"
-                    f"📝 Стало: `{new_text[:200]}`\n"
-                    f"🕐 {datetime.now().strftime('%H:%M:%S')}",
+                    f"📝 Стало: `{new_text[:200]}`",
                     parse_mode="Markdown"
                 )
             except:
@@ -791,7 +772,6 @@ async def b_default(message: types.Message):
         oldest = sorted(message_cache[t].keys())[0]
         message_cache[t].pop(oldest, None)
 
-    # Мут — удаляем сообщения собеседника
     if t in mutes and mutes[t] > datetime.now():
         if msg_from != owner_id:
             try:
@@ -807,10 +787,20 @@ async def b_default(message: types.Message):
     if t in mutes and mutes[t] <= datetime.now():
         mutes.pop(t, None); warns.pop(t, None)
 
-    # Автоповтор
     if clone.get(t) and message.text and msg_from != owner_id:
         await message.answer(message.text)
 
-# ================== ЗАПУСК ==================
 async def main():
-    try
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+        print("✅ Webhook удалён")
+    except Exception as e:
+        print(f"Ошибка: {e}")
+    me = await bot.get_me()
+    bot.username = me.username
+    print(f"✅ Bot started: @{me.username}")
+    await dp.start_polling(bot, drop_pending_updates=True)
+
+if __name__ == "__main__":
+    threading.Thread(target=run_flask, daemon=True).start()
+    asyncio.run(main())
