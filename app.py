@@ -291,61 +291,30 @@ async def on_screenshot(message: types.Message):
         logging.error(f"Ошибка пересылки: {e}")
         await message.answer("⚠️ Ошибка. Свяжитесь с @ysorn.")
 
-@dp.callback_query(F.data.startswith("approve_"))
-async def cb_approve(call: types.CallbackQuery):
-    if call.from_user.id != OWNER_ID:
-        await call.answer("Только владелец может подтверждать!", show_alert=True)
+# ================== ПЕРЕСЫЛКА ВСЕХ ЛС ВЛАДЕЛЬЦУ ==================
+@dp.message()
+async def forward_to_owner(message: types.Message):
+    """Пересылает все сообщения в ЛС бота — владельцу."""
+    if message.chat.type != "private":
         return
-    parts = call.data.split("_")
-    user_id = int(parts[1])
-    plan = parts[2]
-    days = PRICES[plan]["days"]
-    now = datetime.now()
-    current = subscriptions.get(user_id)
-    new_until = (current + timedelta(days=days)) if (current and current > now) else (now + timedelta(days=days))
-    subscriptions[user_id] = new_until
+    if message.from_user.id == OWNER_ID:
+        return
+    if message.text and message.text.startswith("/"):
+        return
+
     try:
+        text = message.text or "[медиа]"
+        user = message.from_user
         await bot.send_message(
-            user_id,
-            f"✅ *Оплата подтверждена!*\n\n"
-            f"💎 Подписка «{PRICES[plan]['label']}» активирована.\n"
-            f"📅 Действует до: *{new_until.strftime('%d.%m.%Y %H:%M')}*",
+            OWNER_ID,
+            f"📩 *Сообщение от пользователя*\n\n"
+            f"👤 От: @{user.username or user.first_name} (ID: `{user.id}`)\n"
+            f"📝 Текст: `{text[:500]}`",
             parse_mode="Markdown"
         )
-    except:
-        pass
-    try:
-        await call.message.edit_caption(caption="✅ Оплата подтверждена")
-    except:
-        pass
-    await call.answer("Подписка активирована ✅")
-
-@dp.callback_query(F.data.startswith("reject_"))
-async def cb_reject(call: types.CallbackQuery):
-    if call.from_user.id != OWNER_ID:
-        await call.answer("Только владелец!", show_alert=True)
-        return
-    user_id = int(call.data.split("_")[1])
-    try:
-        await bot.send_message(user_id, "❌ Оплата отклонена. Свяжитесь с @ysorn.")
-    except:
-        pass
-    try:
-        await call.message.edit_caption(caption="❌ Оплата отклонена")
-    except:
-        pass
-    await call.answer("Отклонено")
-
-@dp.callback_query(F.data == "ref")
-async def cb_ref(call: types.CallbackQuery):
-    uname = bot.username or "my_bot"
-    link = f"https://t.me/{uname}?start=ref_{call.from_user.id}"
-    await call.message.answer(f"👥 *Рефералка*\n🔗 `{link}`", parse_mode="Markdown", reply_markup=back_kb())
-
-@dp.callback_query(F.data == "howto")
-async def cb_howto(call: types.CallbackQuery):
-    await call.message.answer("📚 Настройки → Аккаунт → Автоматизация чатов → Подключить бота", reply_markup=back_kb())
-    # ================== BUSINESS КОМАНДЫ ==================
+    except Exception as e:
+        logging.error(f"Не смог переслать ЛС: {e}")
+        # ================== BUSINESS КОМАНДЫ ==================
 @dp.business_message(F.text.startswith(".mute"))
 async def b_mute(message: types.Message):
     if not await is_owner(message):
@@ -459,14 +428,12 @@ async def b_unwarn(message: types.Message):
             pass
     await message.answer("✅ Предупреждения сняты.")
 
-# ================== .SPAM (удаляет команду и выполняет) ==================
 @dp.business_message(F.text.startswith(".spam"))
 async def b_spam(message: types.Message):
     if not await is_owner(message):
         return
     if not await check_business_subscription(message):
         return
-
     try:
         await bot(DeleteBusinessMessages(
             business_connection_id=message.business_connection_id,
@@ -474,7 +441,6 @@ async def b_spam(message: types.Message):
         ))
     except:
         pass
-
     parts = message.text.split(maxsplit=2)
     if len(parts) < 3:
         await message.answer("Использование: `.spam N текст`")
@@ -490,7 +456,6 @@ async def b_spam(message: types.Message):
         except:
             await asyncio.sleep(0.4)
 
-# ================== .CLONE ==================
 @dp.business_message(F.text.startswith(".clone"))
 async def b_clone(message: types.Message):
     if not await is_owner(message):
@@ -509,15 +474,12 @@ async def b_clone(message: types.Message):
         pass
     await message.answer(f"🔄 Автоповтор {'включён' if state == 'on' else 'выключен'}")
 
-# ================== .ST (удаляет команду и отправляет слова) ==================
 @dp.business_message(F.text.startswith(".st"))
 async def b_st(message: types.Message):
     if not await is_owner(message):
         return
     if not await check_business_subscription(message):
         return
-
-    # Удаляем сообщение с командой
     try:
         await bot(DeleteBusinessMessages(
             business_connection_id=message.business_connection_id,
@@ -525,12 +487,10 @@ async def b_st(message: types.Message):
         ))
     except Exception as e:
         logging.error(f"Не смог удалить .st: {e}")
-
     text = message.text[3:].strip()
     if not text:
         await message.answer("Использование: `.st текст`")
         return
-
     words = text.split()
     logging.info(f"ST: {len(words)} слов")
     for word in words:
@@ -548,7 +508,6 @@ async def b_st(message: types.Message):
             else:
                 await asyncio.sleep(0.4)
 
-# ================== .HISTORY ==================
 @dp.business_message(F.text.startswith(".history"))
 async def b_history(message: types.Message):
     if not await is_owner(message):
@@ -578,7 +537,7 @@ async def b_history(message: types.Message):
         text = text[:4000] + "\n...(обрезано)"
     await message.answer(text, parse_mode="Markdown")
 
-# ================== ОБРАБОТКА ВСЕХ СООБЩЕНИЙ ==================
+# ================== ОБРАБОТКА ВСЕХ БИЗНЕС-СООБЩЕНИЙ ==================
 @dp.business_message()
 async def b_default(message: types.Message):
     t = message.chat.id
@@ -588,10 +547,10 @@ async def b_default(message: types.Message):
     if t in message_cache and message.message_id in message_cache[t]:
         old = message_cache[t][message.message_id]
         new_text = message.text or "[медиа]"
-        if old["text"] != new_text:
+        if old["text"] != new_text and msg_from != owner_id:
             try:
                 await bot.send_message(
-                    OWNER_ID,
+                    owner_id,
                     f"✏️ *Сообщение изменено*\n\n"
                     f"👤 От: @{message.from_user.username or message.from_user.first_name}\n"
                     f"📝 Было: `{old['text'][:200]}`\n"
@@ -623,7 +582,7 @@ async def b_default(message: types.Message):
                 ))
                 try:
                     await bot.send_message(
-                        OWNER_ID,
+                        owner_id,
                         f"🗑 *Удалено (мут)*\n\n"
                         f"👤 От: @{message.from_user.username or message.from_user.first_name}\n"
                         f"📝 `{(message.text or '[медиа]')[:200]}`\n"
