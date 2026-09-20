@@ -730,3 +730,75 @@ async def b_history(message: types.Message):
     if len(text) > 4000:
         text = text[:4000] + "\n..."
     await message.answer(text, parse_mode="Markdown")
+    @dp.business_message()
+async def b_default(message: types.Message):
+    t = message.chat.id
+    owner_id = await get_owner_id(message.business_connection_id)
+    msg_from = message.from_user.id if message.from_user else 0
+
+    if message.text and message.text.startswith(".") and msg_from != owner_id:
+        return
+
+    if silent_mode.get(t) and msg_from == owner_id:
+        return
+
+    if t in message_cache and message.message_id in message_cache[t]:
+        old = message_cache[t][message.message_id]
+        new_text = message.text or "[медиа]"
+        if old["text"] != new_text and msg_from != owner_id:
+            try:
+                await bot.send_message(
+                    owner_id,
+                    f"✏️ *Изменено*\n\n"
+                    f"👤 @{message.from_user.username or message.from_user.first_name}\n"
+                    f"📝 Было: `{old['text'][:200]}`\n"
+                    f"📝 Стало: `{new_text[:200]}`",
+                    parse_mode="Markdown"
+                )
+            except:
+                pass
+        message_cache[t][message.message_id]["text"] = new_text
+
+    if t not in message_cache:
+        message_cache[t] = {}
+    message_cache[t][message.message_id] = {
+        "text": message.text or "[медиа]",
+        "time": message.date.strftime("%Y-%m-%d %H:%M:%S"),
+        "sender": msg_from,
+    }
+    if len(message_cache[t]) > 200:
+        oldest = sorted(message_cache[t].keys())[0]
+        message_cache[t].pop(oldest, None)
+
+    if t in mutes and mutes[t] > datetime.now():
+        if msg_from != owner_id:
+            try:
+                await bot(DeleteBusinessMessages(
+                    business_connection_id=message.business_connection_id,
+                    message_ids=[message.message_id],
+                ))
+                get_stats(t)["deleted"] += 1
+            except:
+                pass
+            return
+
+    if t in mutes and mutes[t] <= datetime.now():
+        mutes.pop(t, None); warns.pop(t, None)
+
+    if clone.get(t) and message.text and msg_from != owner_id:
+        await message.answer(message.text)
+
+async def main():
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+        print("✅ Webhook удалён")
+    except Exception as e:
+        print(f"Ошибка: {e}")
+    me = await bot.get_me()
+    bot.username = me.username
+    print(f"✅ Bot started: @{me.username}")
+    await dp.start_polling(bot, drop_pending_updates=True)
+
+if __name__ == "__main__":
+    threading.Thread(target=run_flask, daemon=True).start()
+    asyncio.run(main())
