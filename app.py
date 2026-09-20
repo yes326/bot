@@ -55,3 +55,84 @@ mutes = {}
 clone = {}
 warn_messages = {}
 stats = {}
+async def check_subscription(user_id):
+    try:
+        member = await bot.get_chat_member(CHANNEL_ID, user_id)
+        return member.status not in ("left", "kicked")
+    except Exception as e:
+        logging.error(f"Ошибка проверки подписки: {e}")
+        return True
+
+def subscribe_kb():
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="📢 Подписаться на канал", url=CHANNEL_LINK)],
+        [types.InlineKeyboardButton(text="✅ Я подписался", callback_data="check_sub")],
+    ])
+
+async def get_owner_id(business_connection_id):
+    if not business_connection_id:
+        return None
+    if business_connection_id in business_owners:
+        return business_owners[business_connection_id]
+    try:
+        conn = await bot.get_business_connection(business_connection_id)
+        owner_id = conn.user.id
+        business_owners[business_connection_id] = owner_id
+        return owner_id
+    except:
+        return None
+
+async def is_owner(message: types.Message):
+    owner_id = await get_owner_id(message.business_connection_id)
+    return owner_id is not None and message.from_user.id == owner_id
+
+async def check_business_subscription(message: types.Message):
+    owner_id = await get_owner_id(message.business_connection_id)
+    if owner_id is None:
+        return False
+    if not await check_subscription(owner_id):
+        try:
+            await message.answer(
+                f"⚠️ *Для использования бота подпишись на канал:*\n{CHANNEL_LINK}",
+                parse_mode="Markdown"
+            )
+        except:
+            pass
+        return False
+    return True
+
+def get_stats(chat_id):
+    if chat_id not in stats:
+        stats[chat_id] = {"deleted": 0, "warns": 0, "mutes": 0}
+    return stats[chat_id]
+
+async def try_delete(message: types.Message):
+    try:
+        await bot(DeleteBusinessMessages(
+            business_connection_id=message.business_connection_id,
+            message_ids=[message.message_id],
+        ))
+    except:
+        pass
+
+def main_menu():
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="📖 Команды бота", callback_data="cmd_list")],
+        [types.InlineKeyboardButton(text="💎 Подписка", callback_data="sub_menu")],
+        [types.InlineKeyboardButton(text="👥 Пригласить друга", callback_data="ref")],
+        [types.InlineKeyboardButton(text="📚 Как подключить", callback_data="howto")],
+    ])
+
+def back_kb():
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="🔙 В меню", callback_data="back_main")]
+    ])
+
+def plans_kb(user_id=None):
+    rows = []
+    if user_id is not None and user_id not in used_trials:
+        rows.append([types.InlineKeyboardButton(text=f"🎁 Пробный период ({TRIAL_DAYS} дней)", callback_data="trial")])
+    for k, v in PRICES.items():
+        rows.append([types.InlineKeyboardButton(text=f"{v['label']} — {v['rub']}₽", callback_data=f"pay_{k}")])
+    rows.append([types.InlineKeyboardButton(text="🔙 Назад", callback_data="back_main")])
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
