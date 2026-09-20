@@ -29,7 +29,6 @@ WARN_MUTE_MINUTES = 5
 
 BANNER_PATH = os.path.join(os.path.dirname(__file__), "IMG_20260918_155302_695.jpg")
 
-# Хранилища
 business_owners = {}
 subscriptions = {}
 pending_payments = {}
@@ -57,7 +56,7 @@ warns = {}
 mutes = {}
 clone = {}
 warn_messages = {}
-stats = {}  # chat_id -> {"deleted": int, "warns": int, "mutes": int}
+stats = {}
 
 # ================== ПРОВЕРКА ПОДПИСКИ ==================
 async def check_subscription(user_id):
@@ -89,6 +88,7 @@ async def get_owner_id(business_connection_id):
         return None
 
 async def is_owner(message: types.Message):
+    """Проверяет, что команду отправил ВЛАДЕЛЕЦ этого бизнес-аккаунта."""
     owner_id = await get_owner_id(message.business_connection_id)
     return owner_id is not None and message.from_user.id == owner_id
 
@@ -111,6 +111,19 @@ def get_stats(chat_id):
     if chat_id not in stats:
         stats[chat_id] = {"deleted": 0, "warns": 0, "mutes": 0}
     return stats[chat_id]
+
+def delete_cmd_kb(chat_id, msg_id):
+    return types.InlineKeyboardMarkup(inline_keyboard=[])
+
+async def try_delete(message: types.Message):
+    """Удаляет сообщение-команду из чата."""
+    try:
+        await bot(DeleteBusinessMessages(
+            business_connection_id=message.business_connection_id,
+            message_ids=[message.message_id],
+        ))
+    except:
+        pass
 
 # ================== КЛАВИАТУРЫ ==================
 def main_menu():
@@ -197,30 +210,11 @@ async def cb_cmds(call: types.CallbackQuery):
     await call.message.answer(
         "📖 *Команды:*\n\n"
         "*Модерация:*\n"
-        "`.mute N` — замутить на N минут\n"
-        "`.unmute` — снять мут\n"
-        "`.warn N` — предупреждения\n"
-        "`.unwarn` — сбросить\n"
-        "`.kick` — удалить сообщение\n"
-        "`.del` — удалить последнее\n"
-        "`.clear N` — удалить N сообщений\n"
-        "`.pin` — закрепить\n\n"
+        "`.mute N`\n`.unmute`\n`.warn N`\n`.unwarn`\n`.kick`\n`.del`\n`.clear N`\n`.pin`\n\n"
         "*Развлечения:*\n"
-        "`.st текст` — по словам\n"
-        "`.spam N текст` — N раз\n"
-        "`.echo текст` — повторить\n"
-        "`.say текст` — сказать\n"
-        "`.roll N` — случайное число\n"
-        "`.flip` — орёл/решка\n"
-        "`.calc выражение` — калькулятор\n"
-        "`.tag` — упомянуть собеседника\n\n"
+        "`.st текст`\n`.spam N текст`\n`.echo текст`\n`.say текст`\n`.roll N`\n`.flip`\n`.calc выражение`\n`.tag`\n\n"
         "*Настройки:*\n"
-        "`.clone on/off` — автоповтор\n"
-        "`.silent on/off` — тихий режим\n"
-        "`.autoreply on/off` — автоответ\n"
-        "`.history N` — история\n"
-        "`.stats` — статистика\n"
-        "`.info` — о собеседнике",
+        "`.clone on/off`\n`.silent on/off`\n`.history N`\n`.stats`\n`.info`",
         parse_mode="Markdown", reply_markup=back_kb())
 
 @dp.callback_query(F.data == "sub_menu")
@@ -316,7 +310,61 @@ async def on_screenshot(message: types.Message):
         logging.error(f"Ошибка пересылки: {e}")
         await message.answer("⚠️ Ошибка. Свяжитесь с @ysorn.")
 
-# ================== ПЕРЕСЫЛКА ВСЕХ ЛС ВЛАДЕЛЬЦУ ==================
+@dp.callback_query(F.data.startswith("approve_"))
+async def cb_approve(call: types.CallbackQuery):
+    if call.from_user.id != OWNER_ID:
+        await call.answer("Только владелец может подтверждать!", show_alert=True)
+        return
+    parts = call.data.split("_")
+    user_id = int(parts[1])
+    plan = parts[2]
+    days = PRICES[plan]["days"]
+    now = datetime.now()
+    current = subscriptions.get(user_id)
+    new_until = (current + timedelta(days=days)) if (current and current > now) else (now + timedelta(days=days))
+    subscriptions[user_id] = new_until
+    try:
+        await bot.send_message(
+            user_id,
+            f"✅ *Оплата подтверждена!*\n\n"
+            f"💎 Подписка «{PRICES[plan]['label']}» активирована.\n"
+            f"📅 Действует до: *{new_until.strftime('%d.%m.%Y %H:%M')}*",
+            parse_mode="Markdown"
+        )
+    except:
+        pass
+    try:
+        await call.message.edit_caption(caption="✅ Оплата подтверждена")
+    except:
+        pass
+    await call.answer("Подписка активирована ✅")
+
+@dp.callback_query(F.data.startswith("reject_"))
+async def cb_reject(call: types.CallbackQuery):
+    if call.from_user.id != OWNER_ID:
+        await call.answer("Только владелец!", show_alert=True)
+        return
+    user_id = int(call.data.split("_")[1])
+    try:
+        await bot.send_message(user_id, "❌ Оплата отклонена. Свяжитесь с @ysorn.")
+    except:
+        pass
+    try:
+        await call.message.edit_caption(caption="❌ Оплата отклонена")
+    except:
+        pass
+    await call.answer("Отклонено")
+
+@dp.callback_query(F.data == "ref")
+async def cb_ref(call: types.CallbackQuery):
+    uname = bot.username or "my_bot"
+    link = f"https://t.me/{uname}?start=ref_{call.from_user.id}"
+    await call.message.answer(f"👥 *Рефералка*\n🔗 `{link}`", parse_mode="Markdown", reply_markup=back_kb())
+
+@dp.callback_query(F.data == "howto")
+async def cb_howto(call: types.CallbackQuery):
+    await call.message.answer("📚 Настройки → Аккаунт → Автоматизация чатов → Подключить бота", reply_markup=back_kb())
+
 @dp.message()
 async def forward_to_owner(message: types.Message):
     if message.chat.type != "private":
@@ -338,41 +386,36 @@ async def forward_to_owner(message: types.Message):
     except Exception as e:
         logging.error(f"Не смог переслать ЛС: {e}")
         # ================== BUSINESS КОМАНДЫ ==================
-# ---- МОДЕРАЦИЯ ----
+# ВАЖНО: во всех командах теперь есть проверка is_owner,
+# чтобы команды НЕ выполнялись у двух ботов одновременно.
 
 @dp.business_message(F.text.startswith(".mute"))
 async def b_mute(message: types.Message):
+    if not await is_owner(message):
+        return
     if not await check_business_subscription(message):
         return
     parts = message.text.split()
     m = int(parts[1]) if len(parts) > 1 else 10
     mutes[message.chat.id] = datetime.now() + timedelta(minutes=m)
     get_stats(message.chat.id)["mutes"] += 1
-    try:
-        await bot(DeleteBusinessMessages(
-            business_connection_id=message.business_connection_id,
-            message_ids=[message.message_id],
-        ))
-    except:
-        pass
+    await try_delete(message)
     await message.answer(f"🔇 Мут {m} мин")
 
 @dp.business_message(F.text.startswith(".unmute"))
 async def b_unmute(message: types.Message):
+    if not await is_owner(message):
+        return
     if not await check_business_subscription(message):
         return
     mutes.pop(message.chat.id, None)
-    try:
-        await bot(DeleteBusinessMessages(
-            business_connection_id=message.business_connection_id,
-            message_ids=[message.message_id],
-        ))
-    except:
-        pass
+    await try_delete(message)
     await message.answer("🔊 Мут снят")
 
 @dp.business_message(F.text.startswith(".warn"))
 async def b_warn(message: types.Message):
+    if not await is_owner(message):
+        return
     if not await check_business_subscription(message):
         return
     parts = message.text.split()
@@ -381,13 +424,7 @@ async def b_warn(message: types.Message):
     warns[t] = min(warns.get(t, 0) + n, WARN_LIMIT)
     get_stats(t)["warns"] += n
     text = f"⚠️ *Предупреждений: {warns[t]}/{WARN_LIMIT}*"
-    try:
-        await bot(DeleteBusinessMessages(
-            business_connection_id=message.business_connection_id,
-            message_ids=[message.message_id],
-        ))
-    except:
-        pass
+    await try_delete(message)
     msg_id = warn_messages.get(t)
     if msg_id:
         try:
@@ -419,18 +456,14 @@ async def b_warn(message: types.Message):
 
 @dp.business_message(F.text.startswith(".unwarn"))
 async def b_unwarn(message: types.Message):
+    if not await is_owner(message):
+        return
     if not await check_business_subscription(message):
         return
     t = message.chat.id
     warns.pop(t, None)
     mutes.pop(t, None)
-    try:
-        await bot(DeleteBusinessMessages(
-            business_connection_id=message.business_connection_id,
-            message_ids=[message.message_id],
-        ))
-    except:
-        pass
+    await try_delete(message)
     msg_id = warn_messages.pop(t, None)
     if msg_id:
         try:
@@ -448,6 +481,8 @@ async def b_unwarn(message: types.Message):
 
 @dp.business_message(F.text == ".del")
 async def b_del(message: types.Message):
+    if not await is_owner(message):
+        return
     if not await check_business_subscription(message):
         return
     reply = message.reply_to_message
@@ -463,6 +498,8 @@ async def b_del(message: types.Message):
 
 @dp.business_message(F.text.startswith(".clear"))
 async def b_clear(message: types.Message):
+    if not await is_owner(message):
+        return
     if not await check_business_subscription(message):
         return
     parts = message.text.split()
@@ -481,6 +518,8 @@ async def b_clear(message: types.Message):
 
 @dp.business_message(F.text == ".kick")
 async def b_kick(message: types.Message):
+    if not await is_owner(message):
+        return
     if not await check_business_subscription(message):
         return
     reply = message.reply_to_message
@@ -496,6 +535,8 @@ async def b_kick(message: types.Message):
 
 @dp.business_message(F.text == ".pin")
 async def b_pin(message: types.Message):
+    if not await is_owner(message):
+        return
     if not await check_business_subscription(message):
         return
     reply = message.reply_to_message
@@ -504,28 +545,16 @@ async def b_pin(message: types.Message):
             await bot.pin_chat_message(chat_id=message.chat.id, message_id=reply.message_id)
             await message.answer("📌 Закреплено")
         except Exception as e:
-            await message.answer(f"⚠️ Не смог закрепить: {e}")
-    try:
-        await bot(DeleteBusinessMessages(
-            business_connection_id=message.business_connection_id,
-            message_ids=[message.message_id],
-        ))
-    except:
-        pass
-
-# ---- РАЗВЛЕЧЕНИЯ ----
+            await message.answer(f"⚠️ Не смог закрепить")
+    await try_delete(message)
 
 @dp.business_message(F.text.startswith(".spam"))
 async def b_spam(message: types.Message):
+    if not await is_owner(message):
+        return
     if not await check_business_subscription(message):
         return
-    try:
-        await bot(DeleteBusinessMessages(
-            business_connection_id=message.business_connection_id,
-            message_ids=[message.message_id],
-        ))
-    except:
-        pass
+    await try_delete(message)
     parts = message.text.split(maxsplit=2)
     if len(parts) < 3:
         await message.answer("Использование: `.spam N текст`")
@@ -543,15 +572,11 @@ async def b_spam(message: types.Message):
 
 @dp.business_message(F.text.startswith(".st"))
 async def b_st(message: types.Message):
+    if not await is_owner(message):
+        return
     if not await check_business_subscription(message):
         return
-    try:
-        await bot(DeleteBusinessMessages(
-            business_connection_id=message.business_connection_id,
-            message_ids=[message.message_id],
-        ))
-    except:
-        pass
+    await try_delete(message)
     text = message.text[3:].strip()
     if not text:
         await message.answer("Использование: `.st текст`")
@@ -565,36 +590,30 @@ async def b_st(message: types.Message):
 
 @dp.business_message(F.text.startswith(".echo"))
 async def b_echo(message: types.Message):
+    if not await is_owner(message):
+        return
     if not await check_business_subscription(message):
         return
-    try:
-        await bot(DeleteBusinessMessages(
-            business_connection_id=message.business_connection_id,
-            message_ids=[message.message_id],
-        ))
-    except:
-        pass
+    await try_delete(message)
     text = message.text[5:].strip()
     if text:
         await message.answer(text)
 
 @dp.business_message(F.text.startswith(".say"))
 async def b_say(message: types.Message):
+    if not await is_owner(message):
+        return
     if not await check_business_subscription(message):
         return
-    try:
-        await bot(DeleteBusinessMessages(
-            business_connection_id=message.business_connection_id,
-            message_ids=[message.message_id],
-        ))
-    except:
-        pass
+    await try_delete(message)
     text = message.text[4:].strip()
     if text:
         await message.answer(text)
 
 @dp.business_message(F.text.startswith(".roll"))
 async def b_roll(message: types.Message):
+    if not await is_owner(message):
+        return
     if not await check_business_subscription(message):
         return
     parts = message.text.split()
@@ -603,31 +622,23 @@ async def b_roll(message: types.Message):
     except:
         n = 100
     result = random.randint(1, n)
-    try:
-        await bot(DeleteBusinessMessages(
-            business_connection_id=message.business_connection_id,
-            message_ids=[message.message_id],
-        ))
-    except:
-        pass
+    await try_delete(message)
     await message.answer(f"🎲 Выпало: *{result}* (из 1–{n})", parse_mode="Markdown")
 
 @dp.business_message(F.text == ".flip")
 async def b_flip(message: types.Message):
+    if not await is_owner(message):
+        return
     if not await check_business_subscription(message):
         return
     result = random.choice(["🦅 Орёл", "🪙 Решка"])
-    try:
-        await bot(DeleteBusinessMessages(
-            business_connection_id=message.business_connection_id,
-            message_ids=[message.message_id],
-        ))
-    except:
-        pass
+    await try_delete(message)
     await message.answer(f"🎲 *{result}*", parse_mode="Markdown")
 
 @dp.business_message(F.text.startswith(".calc"))
 async def b_calc(message: types.Message):
+    if not await is_owner(message):
+        return
     if not await check_business_subscription(message):
         return
     expr = message.text[5:].strip()
@@ -635,83 +646,50 @@ async def b_calc(message: types.Message):
         result = eval(expr, {"__builtins__": None}, {})
     except:
         result = "ошибка"
-    try:
-        await bot(DeleteBusinessMessages(
-            business_connection_id=message.business_connection_id,
-            message_ids=[message.message_id],
-        ))
-    except:
-        pass
+    await try_delete(message)
     await message.answer(f"🧮 `{expr}` = *{result}*", parse_mode="Markdown")
 
 @dp.business_message(F.text == ".tag")
 async def b_tag(message: types.Message):
+    if not await is_owner(message):
+        return
     if not await check_business_subscription(message):
         return
-    owner_id = await get_owner_id(message.business_connection_id)
-    if owner_id:
-        try:
-            await message.answer(f"👤 @{message.from_user.username or message.from_user.first_name}")
-        except:
-            pass
     try:
-        await bot(DeleteBusinessMessages(
-            business_connection_id=message.business_connection_id,
-            message_ids=[message.message_id],
-        ))
+        await message.answer(f"👤 @{message.from_user.username or message.from_user.first_name}")
     except:
         pass
-
-# ---- НАСТРОЙКИ ----
+    await try_delete(message)
 
 @dp.business_message(F.text.startswith(".clone"))
 async def b_clone(message: types.Message):
+    if not await is_owner(message):
+        return
     if not await check_business_subscription(message):
         return
     parts = message.text.split()
     state = parts[1].lower() if len(parts) > 1 else "on"
     clone[message.chat.id] = (state == "on")
-    try:
-        await bot(DeleteBusinessMessages(
-            business_connection_id=message.business_connection_id,
-            message_ids=[message.message_id],
-        ))
-    except:
-        pass
+    await try_delete(message)
     await message.answer(f"🔄 Автоповтор {'включён' if state == 'on' else 'выключен'}")
 
 @dp.business_message(F.text.startswith(".silent"))
 async def b_silent(message: types.Message):
+    if not await is_owner(message):
+        return
     if not await check_business_subscription(message):
         return
     parts = message.text.split()
     state = parts[1].lower() if len(parts) > 1 else "on"
     silent_mode[message.chat.id] = (state == "on")
-    try:
-        await bot(DeleteBusinessMessages(
-            business_connection_id=message.business_connection_id,
-            message_ids=[message.message_id],
-        ))
-    except:
-        pass
+    await try_delete(message)
     if state == "off":
         await message.answer(f"🔊 Тихий режим выключен")
 
-@dp.business_message(F.text == ".autoreply")
-async def b_autoreply(message: types.Message):
-    if not await check_business_subscription(message):
-        return
-    try:
-        await bot(DeleteBusinessMessages(
-            business_connection_id=message.business_connection_id,
-            message_ids=[message.message_id],
-        ))
-    except:
-        pass
-    await message.answer("🤖 Автоответ включён")
-
 @dp.business_message(F.text == ".stats")
 async def b_stats(message: types.Message):
+    if not await is_owner(message):
+        return
     if not await check_business_subscription(message):
         return
     t = message.chat.id
@@ -725,17 +703,13 @@ async def b_stats(message: types.Message):
         f"⚠️ Варнов выдано: *{s['warns']}*\n"
         f"🔇 Мутов: *{s['mutes']}*"
     )
-    try:
-        await bot(DeleteBusinessMessages(
-            business_connection_id=message.business_connection_id,
-            message_ids=[message.message_id],
-        ))
-    except:
-        pass
+    await try_delete(message)
     await message.answer(text, parse_mode="Markdown")
 
 @dp.business_message(F.text == ".info")
 async def b_info(message: types.Message):
+    if not await is_owner(message):
+        return
     if not await check_business_subscription(message):
         return
     owner_id = await get_owner_id(message.business_connection_id)
@@ -747,29 +721,19 @@ async def b_info(message: types.Message):
         f"📅 В кэше сообщений: *{len(message_cache.get(t, {}))}*\n"
         f"🤖 Юзернейм: @{message.from_user.username or 'не установлен'}"
     )
-    try:
-        await bot(DeleteBusinessMessages(
-            business_connection_id=message.business_connection_id,
-            message_ids=[message.message_id],
-        ))
-    except:
-        pass
+    await try_delete(message)
     await message.answer(text, parse_mode="Markdown")
 
 @dp.business_message(F.text.startswith(".history"))
 async def b_history(message: types.Message):
+    if not await is_owner(message):
+        return
     if not await check_business_subscription(message):
         return
     t = message.chat.id
     parts = message.text.split()
     n = int(parts[1]) if len(parts) > 1 else 10
-    try:
-        await bot(DeleteBusinessMessages(
-            business_connection_id=message.business_connection_id,
-            message_ids=[message.message_id],
-        ))
-    except:
-        pass
+    await try_delete(message)
     if t not in message_cache or not message_cache[t]:
         await message.answer("📭 История пуста.")
         return
@@ -790,12 +754,14 @@ async def b_default(message: types.Message):
     owner_id = await get_owner_id(message.business_connection_id)
     msg_from = message.from_user.id if message.from_user else 0
 
-    # Тихий режим
-    if silent_mode.get(t):
-        if msg_from == owner_id:
-            return
+    # Игнорируем команды от НЕ владельца (защита от двойного выполнения)
+    if message.text and message.text.startswith(".") and msg_from != owner_id:
+        return
 
-    # Проверка изменений
+    # Тихий режим — владелец молчит
+    if silent_mode.get(t) and msg_from == owner_id:
+        return
+
     if t in message_cache and message.message_id in message_cache[t]:
         old = message_cache[t][message.message_id]
         new_text = message.text or "[медиа]"
@@ -825,7 +791,7 @@ async def b_default(message: types.Message):
         oldest = sorted(message_cache[t].keys())[0]
         message_cache[t].pop(oldest, None)
 
-    # Мут
+    # Мут — удаляем сообщения собеседника
     if t in mutes and mutes[t] > datetime.now():
         if msg_from != owner_id:
             try:
@@ -847,16 +813,4 @@ async def b_default(message: types.Message):
 
 # ================== ЗАПУСК ==================
 async def main():
-    try:
-        await bot.delete_webhook(drop_pending_updates=True)
-        print("✅ Webhook удалён")
-    except Exception as e:
-        print(f"Ошибка удаления webhook: {e}")
-    me = await bot.get_me()
-    bot.username = me.username
-    print(f"✅ Bot started: @{me.username}")
-    await dp.start_polling(bot, drop_pending_updates=True)
-
-if __name__ == "__main__":
-    threading.Thread(target=run_flask, daemon=True).start()
-    asyncio.run(main())
+    try
