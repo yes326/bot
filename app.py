@@ -135,8 +135,10 @@ def plans_kb(user_id=None):
     for k, v in PRICES.items():
         rows.append([types.InlineKeyboardButton(text=f"{v['label']} — {v['rub']}₽", callback_data=f"pay_{k}")])
     rows.append([types.InlineKeyboardButton(text="🔙 Назад", callback_data="back_main")])
-    return types.InlineKeyboardMarkup(inline_keyboard=rows)
-    @dp.message(F.text == "/start")
+        return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@dp.message(F.text == "/start")
 async def start_cmd(message: types.Message):
     user_id = message.from_user.id
     if not await check_subscription(user_id):
