@@ -291,17 +291,70 @@ async def on_screenshot(message: types.Message):
         logging.error(f"Ошибка пересылки: {e}")
         await message.answer("⚠️ Ошибка. Свяжитесь с @ysorn.")
 
+@dp.callback_query(F.data.startswith("approve_"))
+async def cb_approve(call: types.CallbackQuery):
+    if call.from_user.id != OWNER_ID:
+        await call.answer("Только владелец может подтверждать!", show_alert=True)
+        return
+    parts = call.data.split("_")
+    user_id = int(parts[1])
+    plan = parts[2]
+    days = PRICES[plan]["days"]
+    now = datetime.now()
+    current = subscriptions.get(user_id)
+    new_until = (current + timedelta(days=days)) if (current and current > now) else (now + timedelta(days=days))
+    subscriptions[user_id] = new_until
+    try:
+        await bot.send_message(
+            user_id,
+            f"✅ *Оплата подтверждена!*\n\n"
+            f"💎 Подписка «{PRICES[plan]['label']}» активирована.\n"
+            f"📅 Действует до: *{new_until.strftime('%d.%m.%Y %H:%M')}*",
+            parse_mode="Markdown"
+        )
+    except:
+        pass
+    try:
+        await call.message.edit_caption(caption="✅ Оплата подтверждена")
+    except:
+        pass
+    await call.answer("Подписка активирована ✅")
+
+@dp.callback_query(F.data.startswith("reject_"))
+async def cb_reject(call: types.CallbackQuery):
+    if call.from_user.id != OWNER_ID:
+        await call.answer("Только владелец!", show_alert=True)
+        return
+    user_id = int(call.data.split("_")[1])
+    try:
+        await bot.send_message(user_id, "❌ Оплата отклонена. Свяжитесь с @ysorn.")
+    except:
+        pass
+    try:
+        await call.message.edit_caption(caption="❌ Оплата отклонена")
+    except:
+        pass
+    await call.answer("Отклонено")
+
+@dp.callback_query(F.data == "ref")
+async def cb_ref(call: types.CallbackQuery):
+    uname = bot.username or "my_bot"
+    link = f"https://t.me/{uname}?start=ref_{call.from_user.id}"
+    await call.message.answer(f"👥 *Рефералка*\n🔗 `{link}`", parse_mode="Markdown", reply_markup=back_kb())
+
+@dp.callback_query(F.data == "howto")
+async def cb_howto(call: types.CallbackQuery):
+    await call.message.answer("📚 Настройки → Аккаунт → Автоматизация чатов → Подключить бота", reply_markup=back_kb())
+
 # ================== ПЕРЕСЫЛКА ВСЕХ ЛС ВЛАДЕЛЬЦУ ==================
 @dp.message()
 async def forward_to_owner(message: types.Message):
-    """Пересылает все сообщения в ЛС бота — владельцу."""
     if message.chat.type != "private":
         return
     if message.from_user.id == OWNER_ID:
         return
     if message.text and message.text.startswith("/"):
         return
-
     try:
         text = message.text or "[медиа]"
         user = message.from_user
@@ -492,7 +545,6 @@ async def b_st(message: types.Message):
         await message.answer("Использование: `.st текст`")
         return
     words = text.split()
-    logging.info(f"ST: {len(words)} слов")
     for word in words:
         try:
             await message.answer(word)
@@ -603,6 +655,13 @@ async def b_default(message: types.Message):
 
 # ================== ЗАПУСК ==================
 async def main():
+    # Удаляем webhook перед polling (чтобы не было конфликта)
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+        print("✅ Webhook удалён")
+    except Exception as e:
+        print(f"Webhook: {e}")
+
     me = await bot.get_me()
     bot.username = me.username
     print(f"✅ Bot started: @{me.username}")
