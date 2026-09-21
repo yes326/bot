@@ -1,3 +1,15 @@
+import os
+import logging
+import threading
+import asyncio
+import random
+from datetime import datetime, timedelta
+from flask import Flask
+from aiogram import Bot, Dispatcher, types
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from aiogram.utils import executor
+from aiogram.types import InputFile
+
 # ================== НАСТРОЙКИ ==================
 BOT_TOKEN = "8632065717:AAEYC3ciYv-W7PHzMrWFaX7FyRYNlZJ5_rE"
 CARD_NUMBER = "2204320449407461"
