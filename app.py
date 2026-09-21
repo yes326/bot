@@ -6,7 +6,6 @@ import random
 from datetime import datetime, timedelta
 from flask import Flask
 from aiogram import Bot, Dispatcher, types
-from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.utils import executor
 from aiogram.types import InputFile
 
@@ -47,7 +46,7 @@ def run_flask():
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher(bot, storage=MemoryStorage())
+dp = Dispatcher(bot)
 
 warns = {}
 mutes = {}
@@ -461,4 +460,4 @@ if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     logging.info("Starting bot...")
     executor.start_polling(dp, skip_updates=True)
-  
+    
