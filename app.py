@@ -259,3 +259,157 @@ async def cb_ref(call):
 @dp.callback_query_handler(text="howto")
 async def cb_howto(call):
     await call.message.answer("📚 Настройки → Аккаунт → Автоматизация чатов", reply_markup=back_kb())
+# ================== BUSINESS КОМАНДЫ ==================
+@dp.message_handler(lambda m: m.text and m.text.startswith("."))
+async def b_commands(message):
+    if message.chat.type == "private":
+        return
+    t = message.chat.id
+    reply = message.reply_to_message
+    owner_id = await get_owner_id(message.business_connection_id)
+    if not await is_owner(message):
+        return
+    if not await check_business_subscription(message):
+        return
+    parts = message.text.split()
+    cmd = parts[0].lower()
+
+    if cmd == ".mute" and reply:
+        m = int(parts[1]) if len(parts) > 1 else 10
+        mutes[t] = datetime.now() + timedelta(minutes=m)
+        get_stats(t)["mutes"] += 1
+        await try_delete(message)
+        await message.answer(f"🔇 Мут {m} мин")
+
+    elif cmd == ".unmute":
+        mutes.pop(t, None)
+        await try_delete(message)
+        await message.answer("🔊 Мут снят")
+
+    elif cmd == ".warn":
+        n = int(parts[1]) if len(parts) > 1 else 1
+        warns[t] = min(warns.get(t, 0) + n, WARN_LIMIT)
+        get_stats(t)["warns"] += n
+        await try_delete(message)
+        text = f"⚠️ Предупреждений: {warns[t]}/{WARN_LIMIT}"
+        await message.answer(text)
+        if warns[t] >= WARN_LIMIT:
+            mutes[t] = datetime.now() + timedelta(minutes=WARN_MUTE_MINUTES)
+
+    elif cmd == ".unwarn":
+        warns.pop(t, None)
+        mutes.pop(t, None)
+        await try_delete(message)
+        await message.answer("✅ Сброшено")
+
+    elif cmd == ".del" and reply:
+        await try_delete(reply)
+        await try_delete(message)
+
+    elif cmd == ".kick" and reply:
+        await try_delete(reply)
+        await try_delete(message)
+
+    elif cmd == ".clear":
+        n = int(parts[1]) if len(parts) > 1 else 5
+        if t in message_cache:
+            ids = sorted(message_cache[t].keys())[-n:]
+            for mid in ids:
+                try:
+                    await bot.delete_message(t, mid)
+                except:
+                    pass
+        await try_delete(message)
+
+    elif cmd == ".spam":
+        p = message.text.split(maxsplit=2)
+        if len(p) < 3:
+            return
+        try:
+            n = min(int(p[1]), 50)
+        except:
+            n = 1
+        await try_delete(message)
+        for _ in range(n):
+            try:
+                await message.answer(p[2])
+                await asyncio.sleep(0.2)
+            except:
+                await asyncio.sleep(0.4)
+
+    elif cmd == ".st":
+        text = message.text[3:].strip()
+        if not text:
+            return
+        await try_delete(message)
+        for word in text.split():
+            try:
+                await message.answer(word)
+                await asyncio.sleep(0.2)
+            except:
+                await asyncio.sleep(0.4)
+
+    elif cmd == ".echo":
+        text = message.text[5:].strip()
+        if text:
+            await message.answer(text)
+        await try_delete(message)
+
+    elif cmd == ".say":
+        text = message.text[4:].strip()
+        if text:
+            await message.answer(text)
+        await try_delete(message)
+
+    elif cmd == ".roll":
+        n = int(parts[1]) if len(parts) > 1 else 100
+        await try_delete(message)
+        await message.answer(f"🎲 {random.randint(1, n)}")
+
+    elif cmd == ".flip":
+        await try_delete(message)
+        await message.answer(random.choice(["🦅 Орёл", "🪙 Решка"]))
+
+    elif cmd == ".calc":
+        expr = message.text[5:].strip()
+        try:
+            res = eval(expr, {"__builtins__": None}, {})
+        except:
+            res = "ошибка"
+        await try_delete(message)
+        await message.answer(f"🧮 {expr} = {res}")
+
+    elif cmd == ".clone":
+        state = parts[1].lower() if len(parts) > 1 else "on"
+        clone[t] = (state == "on")
+        await try_delete(message)
+        await message.answer(f"🔄 Автоповтор {'вкл' if state == 'on' else 'выкл'}")
+
+    elif cmd == ".silent":
+        state = parts[1].lower() if len(parts) > 1 else "on"
+        silent_mode[t] = (state == "on")
+        await try_delete(message)
+        if state == "off":
+            await message.answer("🔊 Тихий режим выкл")
+
+    elif cmd == ".stats":
+        s = get_stats(t)
+        await try_delete(message)
+        await message.answer(f"📊 Варнов: {warns.get(t, 0)}/{WARN_LIMIT}\nМут: {'да' if t in mutes else 'нет'}\nУдалено: {s['deleted']}")
+
+    elif cmd == ".info":
+        await try_delete(message)
+        await message.answer(f"🆔 {t}\nВладелец: {owner_id}\nВ кэше: {len(message_cache.get(t, {}))}")
+
+    elif cmd == ".history":
+        n = int(parts[1]) if len(parts) > 1 else 10
+        await try_delete(message)
+        if t not in message_cache or not message_cache[t]:
+            await message.answer("📭 История пуста")
+            return
+        items = sorted(message_cache[t].items(), key=lambda x: x[1]["time"])[-n:]
+        text = f"📜 Последние {len(items)}:\n\n"
+        for mid, d in items:
+            who = "Ты" if d["sender"] == owner_id else "Собеседник"
+            text += f"{who} ({d['time']}): {d['text'][:150]}\n"
+        await message.answer(text[:4000])
