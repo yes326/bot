@@ -1,3 +1,2 @@
-aiogram>=3.15.0
+aiogram==2.25.1
 flask
-python-dotenv
