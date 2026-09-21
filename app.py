@@ -469,3 +469,8 @@ async def on_edit(message):
         await bot.send_message(owner_id, f"✏️ Изменено:\n{message.text[:300]}")
     except:
         pass
+# ================== ЗАПУСК ==================
+if __name__ == "__main__":
+    threading.Thread(target=run_flask, daemon=True).start()
+    logging.info("Starting bot...")
+    executor.start_polling(dp, skip_updates=True)
