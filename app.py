@@ -130,8 +130,6 @@ def plans_kb(user_id=None):
         rows.append([types.InlineKeyboardButton(text=f"{v['label']} — {v['rub']}₽", callback_data=f"pay_{k}")])
     rows.append([types.InlineKeyboardButton(text="🔙 Назад", callback_data="back_main")])
         return types.InlineKeyboardMarkup(inline_keyboard=rows)
-
-
 @dp.message_handler(commands=['start'])
 async def start_cmd(message):
     uid = message.from_user.id
