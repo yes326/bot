@@ -10,7 +10,6 @@ from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.utils import executor
 from aiogram.types import InputFile
 
-# ================== НАСТРОЙКИ ==================
 BOT_TOKEN = "8632065717:AAEw31UR7QX8H7I4hCL-ArPbHC5fpejxa_E"
 CARD_NUMBER = "2204320449407461"
 OWNER_USERNAME = "ysorn"
@@ -130,6 +129,7 @@ def plans_kb(user_id=None):
         rows.append([types.InlineKeyboardButton(text=f"{v['label']} — {v['rub']}₽", callback_data=f"pay_{k}")])
     rows.append([types.InlineKeyboardButton(text="🔙 Назад", callback_data="back_main")])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
 @dp.message_handler(commands=['start'])
 async def start_cmd(message):
     uid = message.from_user.id
@@ -266,7 +266,7 @@ async def cb_ref(call):
 @dp.callback_query_handler(text="howto")
 async def cb_howto(call):
     await call.message.answer("📚 Настройки → Аккаунт → Автоматизация чатов", reply_markup=back_kb())
-    # ================== BUSINESS КОМАНДЫ ==================
+
 @dp.message_handler(lambda m: m.text and m.text.startswith("."))
 async def b_commands(message):
     if message.chat.type == "private":
@@ -287,36 +287,29 @@ async def b_commands(message):
         get_stats(t)["mutes"] += 1
         await try_delete(message)
         await message.answer(f"🔇 Мут {m} мин")
-
     elif cmd == ".unmute":
         mutes.pop(t, None)
         await try_delete(message)
         await message.answer("🔊 Мут снят")
-
     elif cmd == ".warn":
         n = int(parts[1]) if len(parts) > 1 else 1
         warns[t] = min(warns.get(t, 0) + n, WARN_LIMIT)
         get_stats(t)["warns"] += n
         await try_delete(message)
-        text = f"⚠️ Предупреждений: {warns[t]}/{WARN_LIMIT}"
-        await message.answer(text)
+        await message.answer(f"⚠️ Предупреждений: {warns[t]}/{WARN_LIMIT}")
         if warns[t] >= WARN_LIMIT:
             mutes[t] = datetime.now() + timedelta(minutes=WARN_MUTE_MINUTES)
-
     elif cmd == ".unwarn":
         warns.pop(t, None)
         mutes.pop(t, None)
         await try_delete(message)
         await message.answer("✅ Сброшено")
-
     elif cmd == ".del" and reply:
         await try_delete(reply)
         await try_delete(message)
-
     elif cmd == ".kick" and reply:
         await try_delete(reply)
         await try_delete(message)
-
     elif cmd == ".clear":
         n = int(parts[1]) if len(parts) > 1 else 5
         if t in message_cache:
@@ -327,7 +320,6 @@ async def b_commands(message):
                 except:
                     pass
         await try_delete(message)
-
     elif cmd == ".spam":
         p = message.text.split(maxsplit=2)
         if len(p) < 3:
@@ -343,7 +335,6 @@ async def b_commands(message):
                 await asyncio.sleep(0.2)
             except:
                 await asyncio.sleep(0.4)
-
     elif cmd == ".st":
         text = message.text[3:].strip()
         if not text:
@@ -355,28 +346,23 @@ async def b_commands(message):
                 await asyncio.sleep(0.2)
             except:
                 await asyncio.sleep(0.4)
-
     elif cmd == ".echo":
         text = message.text[5:].strip()
         if text:
             await message.answer(text)
         await try_delete(message)
-
     elif cmd == ".say":
         text = message.text[4:].strip()
         if text:
             await message.answer(text)
         await try_delete(message)
-
     elif cmd == ".roll":
         n = int(parts[1]) if len(parts) > 1 else 100
         await try_delete(message)
         await message.answer(f"🎲 {random.randint(1, n)}")
-
     elif cmd == ".flip":
         await try_delete(message)
         await message.answer(random.choice(["🦅 Орёл", "🪙 Решка"]))
-
     elif cmd == ".calc":
         expr = message.text[5:].strip()
         try:
@@ -385,29 +371,24 @@ async def b_commands(message):
             res = "ошибка"
         await try_delete(message)
         await message.answer(f"🧮 {expr} = {res}")
-
     elif cmd == ".clone":
         state = parts[1].lower() if len(parts) > 1 else "on"
         clone[t] = (state == "on")
         await try_delete(message)
         await message.answer(f"🔄 Автоповтор {'вкл' if state == 'on' else 'выкл'}")
-
     elif cmd == ".silent":
         state = parts[1].lower() if len(parts) > 1 else "on"
         silent_mode[t] = (state == "on")
         await try_delete(message)
         if state == "off":
             await message.answer("🔊 Тихий режим выкл")
-
     elif cmd == ".stats":
         s = get_stats(t)
         await try_delete(message)
         await message.answer(f"📊 Варнов: {warns.get(t, 0)}/{WARN_LIMIT}\nМут: {'да' if t in mutes else 'нет'}\nУдалено: {s['deleted']}")
-
     elif cmd == ".info":
         await try_delete(message)
         await message.answer(f"🆔 {t}\nВладелец: {owner_id}\nВ кэше: {len(message_cache.get(t, {}))}")
-
     elif cmd == ".history":
         n = int(parts[1]) if len(parts) > 1 else 10
         await try_delete(message)
@@ -420,7 +401,7 @@ async def b_commands(message):
             who = "Ты" if d["sender"] == owner_id else "Собеседник"
             text += f"{who} ({d['time']}): {d['text'][:150]}\n"
         await message.answer(text[:4000])
-        # ================== ОБРАБОТКА БИЗНЕС-СООБЩЕНИЙ ==================
+
 @dp.message_handler(content_types=types.ContentTypes.TEXT)
 async def on_biz_message(message):
     if message.chat.type == "private":
@@ -431,7 +412,6 @@ async def on_biz_message(message):
 
     if message.text and message.text.startswith(".") and msg_from != owner_id:
         return
-
     if silent_mode.get(t) and msg_from == owner_id:
         return
 
@@ -462,7 +442,6 @@ async def on_biz_message(message):
     if clone.get(t) and message.text and msg_from != owner_id:
         await message.answer(message.text)
 
-# ================== УВЕДОМЛЕНИЯ ОБ ИЗМЕНЕНИЯХ ==================
 @dp.edited_message_handler()
 async def on_edit(message):
     if message.chat.type == "private":
@@ -476,7 +455,6 @@ async def on_edit(message):
     except:
         pass
 
-# ================== ЗАПУСК ==================
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     logging.info("Starting bot...")
