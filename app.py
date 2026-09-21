@@ -130,3 +130,139 @@ def plans_kb(user_id=None):
         rows.append([types.InlineKeyboardButton(text=f"{v['label']} — {v['rub']}₽", callback_data=f"pay_{k}")])
     rows.append([types.InlineKeyboardButton(text="🔙 Назад", callback_data="back_main")])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
+    @dp.message_handler(commands=['start'])
+async def start_cmd(message):
+    uid = message.from_user.id
+    if not await check_subscription(uid):
+        await message.answer("⚠️ Подпишись на канал:", reply_markup=subscribe_kb())
+        return
+    try:
+        await message.answer_photo(InputFile(BANNER_PATH), caption="🏠 Главное меню", reply_markup=main_menu())
+    except:
+        await message.answer("🏠 Главное меню", reply_markup=main_menu())
+
+@dp.callback_query_handler(text="check_sub")
+async def cb_check_sub(call):
+    if await check_subscription(call.from_user.id):
+        try:
+            await call.message.delete()
+        except:
+            pass
+        await call.message.answer("🏠 Главное меню", reply_markup=main_menu())
+    else:
+        await call.answer("❌ Не подписан!", show_alert=True)
+
+@dp.callback_query_handler(text="back_main")
+async def cb_back(call):
+    await call.message.edit_text("🏠 Главное меню", reply_markup=main_menu())
+
+@dp.callback_query_handler(text="cmd_list")
+async def cb_cmds(call):
+    await call.message.answer(
+        "📖 Команды:\n.mute N\n.unmute\n.warn N\n.unwarn\n.kick\n.del\n.clear N\n.st текст\n.spam N текст\n.echo текст\n.say текст\n.roll N\n.flip\n.calc выражение\n.clone on/off\n.silent on/off\n.history N\n.stats\n.info",
+        reply_markup=back_kb())
+
+@dp.callback_query_handler(text="sub_menu")
+async def cb_sub(call):
+    uid = call.from_user.id
+    now = datetime.now()
+    current = subscriptions.get(uid)
+    status = "не активна"
+    if current and current > now:
+        days_left = (current - now).days
+        status = f"активна до {current.strftime('%d.%m.%Y')} ({days_left} дн.)"
+    trial_text = ""
+    if uid not in used_trials:
+        trial_text = f"🎁 Пробный период — {TRIAL_DAYS} дней\n\n"
+    await call.message.answer(f"💎 Подписка\n\n📌 Статус: {status}\n\n{trial_text}Выбери 👇", reply_markup=plans_kb(uid))
+
+@dp.callback_query_handler(text="trial")
+async def cb_trial(call):
+    uid = call.from_user.id
+    now = datetime.now()
+    if uid in used_trials:
+        await call.answer("Уже использовал!", show_alert=True)
+        return
+    current = subscriptions.get(uid)
+    if current and current > now:
+        await call.answer("Уже есть подписка!", show_alert=True)
+        return
+    used_trials.add(uid)
+    until = now + timedelta(days=TRIAL_DAYS)
+    subscriptions[uid] = until
+    await call.message.answer(f"🎁 Пробный до {until.strftime('%d.%m.%Y %H:%M')}")
+
+@dp.callback_query_handler(text_startswith="pay_")
+async def cb_pay(call):
+    plan = call.data.split("_")[1]
+    p = PRICES[plan]
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"paid_{plan}")],
+        [types.InlineKeyboardButton(text="🔙 Назад", callback_data="sub_menu")],
+    ])
+    await call.message.answer(f"💳 {p['label']} — {p['rub']}₽\nКарта: {CARD_NUMBER}\n\nНажми «Я оплатил» и пришли скриншот.", reply_markup=kb)
+
+@dp.callback_query_handler(text_startswith="paid_")
+async def cb_paid(call):
+    plan = call.data.split("_")[1]
+    pending_payments[call.from_user.id] = {"plan": plan}
+    await call.message.answer("📸 Пришли скриншот.")
+
+@dp.message_handler(content_types=['photo'])
+async def on_screenshot(message):
+    uid = message.from_user.id
+    if uid not in pending_payments:
+        return
+    plan = pending_payments[uid].get("plan", "1month")
+    user = message.from_user
+    owner_kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="✅ Да", callback_data=f"approve_{user.id}_{plan}")],
+        [types.InlineKeyboardButton(text="❌ Нет", callback_data=f"reject_{user.id}")],
+    ])
+    try:
+        await bot.send_photo(OWNER_ID, message.photo[-1].file_id, caption=f"💰 Оплата от @{user.username}\nПлан: {PRICES[plan]['label']}", reply_markup=owner_kb)
+        await message.answer("✅ Отправлено! Жди подтверждения.")
+        pending_payments.pop(uid, None)
+    except:
+        await message.answer("⚠️ Ошибка.")
+
+@dp.callback_query_handler(text_startswith="approve_")
+async def cb_approve(call):
+    if call.from_user.id != OWNER_ID:
+        await call.answer("Только владелец!")
+        return
+    parts = call.data.split("_")
+    uid = int(parts[1])
+    plan = parts[2]
+    days = PRICES[plan]["days"]
+    now = datetime.now()
+    current = subscriptions.get(uid)
+    new_until = (current + timedelta(days=days)) if (current and current > now) else (now + timedelta(days=days))
+    subscriptions[uid] = new_until
+    try:
+        await bot.send_message(uid, f"✅ Оплата подтверждена до {new_until.strftime('%d.%m.%Y %H:%M')}")
+    except:
+        pass
+    await call.message.edit_reply_markup(reply_markup=None)
+    await call.answer("OK")
+
+@dp.callback_query_handler(text_startswith="reject_")
+async def cb_reject(call):
+    if call.from_user.id != OWNER_ID:
+        await call.answer("Только владелец!")
+        return
+    uid = int(call.data.split("_")[1])
+    try:
+        await bot.send_message(uid, "❌ Оплата отклонена.")
+    except:
+        pass
+    await call.message.edit_reply_markup(reply_markup=None)
+
+@dp.callback_query_handler(text="ref")
+async def cb_ref(call):
+    uname = bot.username or "my_bot"
+    await call.message.answer(f"👥 Ссылка:\nhttps://t.me/{uname}?start=ref_{call.from_user.id}", reply_markup=back_kb())
+
+@dp.callback_query_handler(text="howto")
+async def cb_howto(call):
+    await call.message.answer("📚 Настройки → Аккаунт → Автоматизация чатов", reply_markup=back_kb())
