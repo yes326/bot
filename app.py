@@ -408,4 +408,11 @@ if __name__ == "__main__":
     logging.info("Starting bot...")
     executor.start_polling(dp, skip_updates=True)
 ENDOFPYTHON
-~ $ /data/data/com.termux/files/home/app.py
+    if t in mutes and mutes[t] <= datetime.now():
+        mutes.pop(t, None); warns.pop(t, None)
+    if clone.get(t) and message.text and msg_from != owner_id:
+        await message.answer(message.text)
+
+if __name__ == "__main__":
+    threading.Thread(target=run_flask, daemon=True).start()
+    executor.start_polling(dp, skip_updates=True)
