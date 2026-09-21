@@ -1,20 +1,8 @@
-import os
-import logging
-import threading
-import asyncio
-import random
-from datetime import datetime, timedelta
-from flask import Flask
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.methods import DeleteBusinessMessages, EditMessageText
-
 # ================== НАСТРОЙКИ ==================
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8632065717:AAEYC3ciYv-W7PHzMrWFaX7FyRYNlZJ5_rE")
+BOT_TOKEN = "8632065717:AAEYC3ciYv-W7PHzMrWFaX7FyRYNlZJ5_rE"
 CARD_NUMBER = "2204320449407461"
 OWNER_USERNAME = "ysorn"
 OWNER_ID = 8502858396
-
 CHANNEL_LINK = "https://t.me/+MV9rTn9A6L1hNGNi"
 CHANNEL_ID = -1004412177691
 
@@ -48,84 +36,78 @@ def run_flask():
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher(storage=MemoryStorage())
+dp = Dispatcher(bot, storage=MemoryStorage())
 
 warns = {}
 mutes = {}
 clone = {}
 warn_messages = {}
 stats = {}
+
 async def check_subscription(user_id):
     try:
         member = await bot.get_chat_member(CHANNEL_ID, user_id)
         return member.status not in ("left", "kicked")
-    except Exception as e:
-        logging.error(f"Ошибка проверки подписки: {e}")
+    except:
         return True
 
 def subscribe_kb():
     return types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="📢 Подписаться на канал", url=CHANNEL_LINK)],
+        [types.InlineKeyboardButton(text="📢 Подписаться", url=CHANNEL_LINK)],
         [types.InlineKeyboardButton(text="✅ Я подписался", callback_data="check_sub")],
     ])
 
-async def get_owner_id(business_connection_id):
-    if not business_connection_id:
+async def get_owner_id(bcid):
+    if not bcid:
         return None
-    if business_connection_id in business_owners:
-        return business_owners[business_connection_id]
+    if bcid in business_owners:
+        return business_owners[bcid]
     try:
-        conn = await bot.get_business_connection(business_connection_id)
-        owner_id = conn.user.id
-        business_owners[business_connection_id] = owner_id
-        return owner_id
+        conn = await bot.get_business_connection(bcid)
+        oid = conn.user.id
+        business_owners[bcid] = oid
+        return oid
     except:
         return None
 
-async def is_owner(message: types.Message):
-    owner_id = await get_owner_id(message.business_connection_id)
-    return owner_id is not None and message.from_user.id == owner_id
+async def is_owner(message):
+    oid = await get_owner_id(message.business_connection_id)
+    return oid is not None and message.from_user.id == oid
 
-async def check_business_subscription(message: types.Message):
-    owner_id = await get_owner_id(message.business_connection_id)
-    if owner_id is None:
+async def check_business_subscription(message):
+    oid = await get_owner_id(message.business_connection_id)
+    if oid is None:
         return False
-    if not await check_subscription(owner_id):
+    if not await check_subscription(oid):
         try:
-            await message.answer(
-                f"⚠️ *Для использования бота подпишись на канал:*\n{CHANNEL_LINK}",
-                parse_mode="Markdown"
-            )
+            await message.answer(f"⚠️ Подпишись на канал:\n{CHANNEL_LINK}")
         except:
             pass
         return False
     return True
 
-def get_stats(chat_id):
-    if chat_id not in stats:
-        stats[chat_id] = {"deleted": 0, "warns": 0, "mutes": 0}
-    return stats[chat_id]
+def get_stats(cid):
+    if cid not in stats:
+        stats[cid] = {"deleted": 0, "warns": 0, "mutes": 0}
+    return stats[cid]
 
-async def try_delete(message: types.Message):
+async def try_delete(message):
     try:
-        await bot(DeleteBusinessMessages(
-            business_connection_id=message.business_connection_id,
-            message_ids=[message.message_id],
-        ))
+        await bot.delete_message(message.chat.id, message.message_id)
     except:
         pass
 
 def main_menu():
     return types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="📖 Команды бота", callback_data="cmd_list")],
+        [types.InlineKeyboardButton(text="📖 Команды", callback_data="cmd_list")],
         [types.InlineKeyboardButton(text="💎 Подписка", callback_data="sub_menu")],
-        [types.InlineKeyboardButton(text="👥 Пригласить друга", callback_data="ref")],
+        [types.InlineKeyboardButton(text="👥 Друг", callback_data="ref")],
         [types.InlineKeyboardButton(text="📚 Как подключить", callback_data="howto")],
     ])
 
 def back_kb():
     return types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="🔙 В меню", callback_data="back_main")]
+        [types.InlineKeyboardButton(text="🔙 Назад", callback_data="back_main")]
     ])
 
 def plans_kb(user_id=None):
@@ -135,638 +117,274 @@ def plans_kb(user_id=None):
     for k, v in PRICES.items():
         rows.append([types.InlineKeyboardButton(text=f"{v['label']} — {v['rub']}₽", callback_data=f"pay_{k}")])
     rows.append([types.InlineKeyboardButton(text="🔙 Назад", callback_data="back_main")])
-        return types.InlineKeyboardMarkup(inline_keyboard=rows)
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
-@dp.message(F.text == "/start")
-async def start_cmd(message: types.Message):
-    user_id = message.from_user.id
-    if not await check_subscription(user_id):
-        await message.answer(
-            "⚠️ *Для использования бота нужно подписаться на наш канал.*\n\n"
-            "📢 Подпишись и нажми «✅ Я подписался».",
-            parse_mode="Markdown",
-            reply_markup=subscribe_kb()
-        )
+@dp.message_handler(commands=['start'])
+async def start_cmd(message):
+    uid = message.from_user.id
+    if not await check_subscription(uid):
+        await message.answer("⚠️ Подпишись на канал:", reply_markup=subscribe_kb())
         return
     try:
-        await message.answer_photo(
-            photo=types.FSInputFile(BANNER_PATH),
-            caption="🏠 *Главное меню*\n\nВыбери, что тебя интересует 👇",
-            parse_mode="Markdown",
-            reply_markup=main_menu()
-        )
-    except Exception as e:
-        logging.error(f"Баннер: {e}")
-        await message.answer("🏠 *Главное меню*\n\nВыбери 👇", parse_mode="Markdown", reply_markup=main_menu())
+        await message.answer_photo(InputFile(BANNER_PATH), caption="🏠 Главное меню", reply_markup=main_menu())
+    except:
+        await message.answer("🏠 Главное меню", reply_markup=main_menu())
 
-@dp.callback_query(F.data == "check_sub")
-async def cb_check_sub(call: types.CallbackQuery):
+@dp.callback_query_handler(text="check_sub")
+async def cb_check_sub(call):
     if await check_subscription(call.from_user.id):
         try:
             await call.message.delete()
         except:
             pass
-        try:
-            await call.message.answer_photo(
-                photo=types.FSInputFile(BANNER_PATH),
-                caption="🏠 *Главное меню*\n\nВыбери 👇",
-                parse_mode="Markdown",
-                reply_markup=main_menu()
-            )
-        except:
-            await call.message.answer("🏠 *Главное меню*\n\nВыбери 👇", parse_mode="Markdown", reply_markup=main_menu())
+        await call.message.answer("🏠 Главное меню", reply_markup=main_menu())
     else:
-        await call.answer("❌ Ты ещё не подписался на канал!", show_alert=True)
+        await call.answer("❌ Не подписан!", show_alert=True)
 
-@dp.callback_query(F.data == "back_main")
-async def cb_back(call: types.CallbackQuery):
-    try:
-        await call.message.delete()
-    except:
-        pass
-    try:
-        await call.message.answer_photo(
-            photo=types.FSInputFile(BANNER_PATH),
-            caption="🏠 *Главное меню*\n\nВыбери 👇",
-            parse_mode="Markdown",
-            reply_markup=main_menu()
-        )
-    except:
-        await call.message.answer("🏠 *Главное меню*\n\nВыбери 👇", parse_mode="Markdown", reply_markup=main_menu())
+@dp.callback_query_handler(text="back_main")
+async def cb_back(call):
+    await call.message.edit_text("🏠 Главное меню", reply_markup=main_menu())
 
-@dp.callback_query(F.data == "cmd_list")
-async def cb_cmds(call: types.CallbackQuery):
+@dp.callback_query_handler(text="cmd_list")
+async def cb_cmds(call):
     await call.message.answer(
-        "📖 *Команды:*\n\n"
-        "*Модерация:*\n"
-        "`.mute N`\n`.unmute`\n`.warn N`\n`.unwarn`\n`.kick`\n`.del`\n`.clear N`\n`.pin`\n\n"
-        "*Развлечения:*\n"
-        "`.st текст`\n`.spam N текст`\n`.echo текст`\n`.say текст`\n`.roll N`\n`.flip`\n`.calc выражение`\n`.tag`\n\n"
-        "*Настройки:*\n"
-        "`.clone on/off`\n`.silent on/off`\n`.history N`\n`.stats`\n`.info`",
-        parse_mode="Markdown", reply_markup=back_kb())
+        "📖 Команды:\n.mute N\n.unmute\n.warn N\n.unwarn\n.kick\n.del\n.clear N\n.st текст\n.spam N текст\n.echo текст\n.say текст\n.roll N\n.flip\n.calc выражение\n.clone on/off\n.silent on/off\n.history N\n.stats\n.info",
+        reply_markup=back_kb())
 
-@dp.callback_query(F.data == "sub_menu")
-async def cb_sub(call: types.CallbackQuery):
-    user_id = call.from_user.id
+@dp.callback_query_handler(text="sub_menu")
+async def cb_sub(call):
+    uid = call.from_user.id
     now = datetime.now()
-    current = subscriptions.get(user_id)
+    current = subscriptions.get(uid)
     status = "не активна"
     if current and current > now:
         days_left = (current - now).days
-        status = f"активна до {current.strftime('%d.%m.%Y')} (осталось {days_left} дн.)"
+        status = f"активна до {current.strftime('%d.%m.%Y')} ({days_left} дн.)"
     trial_text = ""
-    if user_id not in used_trials:
-        trial_text = f"🎁 Пробный период — {TRIAL_DAYS} дней (только 1 раз)\n\n"
-    await call.message.answer(
-        f"💎 *Подписка AntiSpam Defender*\n\n"
-        f"📌 Статус: *{status}*\n\n"
-        f"{trial_text}"
-        f"Выбери действие 👇",
-        parse_mode="Markdown",
-        reply_markup=plans_kb(user_id)
-    )
+    if uid not in used_trials:
+        trial_text = f"🎁 Пробный период — {TRIAL_DAYS} дней\n\n"
+    await call.message.answer(f"💎 Подписка\n\n📌 Статус: {status}\n\n{trial_text}Выбери 👇", reply_markup=plans_kb(uid))
 
-@dp.callback_query(F.data == "trial")
-async def cb_trial(call: types.CallbackQuery):
-    user_id = call.from_user.id
+@dp.callback_query_handler(text="trial")
+async def cb_trial(call):
+    uid = call.from_user.id
     now = datetime.now()
-    if user_id in used_trials:
-        await call.answer("❌ Ты уже использовал пробный период!", show_alert=True)
-        return
-    current = subscriptions.get(user_id)
+    if uid in used_trials:
+        await call.answer("Уже использовал!", show_alert=True); return
+    current = subscriptions.get(uid)
     if current and current > now:
-        await call.answer("❌ У тебя уже есть активная подписка!", show_alert=True)
-        return
-    used_trials.add(user_id)
+        await call.answer("Уже есть подписка!", show_alert=True); return
+    used_trials.add(uid)
     until = now + timedelta(days=TRIAL_DAYS)
-    subscriptions[user_id] = until
-    await call.message.answer(
-        f"🎁 *Пробный период активирован!*\n\n"
-        f"💎 Тебе доступно *{TRIAL_DAYS} дней* бесплатно.\n"
-        f"📅 Действует до: *{until.strftime('%d.%m.%Y %H:%M')}*",
-        parse_mode="Markdown"
-    )
-    await call.answer("Пробный период активирован ✅")
+    subscriptions[uid] = until
+    await call.message.answer(f"🎁 Пробный до {until.strftime('%d.%m.%Y %H:%M')}")
 
-@dp.callback_query(F.data.startswith("pay_"))
-async def cb_pay(call: types.CallbackQuery):
+@dp.callback_query_handler(text_startswith="pay_")
+async def cb_pay(call):
     plan = call.data.split("_")[1]
     p = PRICES[plan]
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"paid_{plan}")],
         [types.InlineKeyboardButton(text="🔙 Назад", callback_data="sub_menu")],
     ])
-    await call.message.answer(
-        f"💳 *Оплата «{p['label']}»*\n\n"
-        f"💰 Сумма: *{p['rub']}₽*\n"
-        f"💳 Карта: `{CARD_NUMBER}`\n\n"
-        f"📸 После перевода нажми «Я оплатил» и пришли скриншот.",
-        parse_mode="Markdown", reply_markup=kb)
+    await call.message.answer(f"💳 {p['label']} — {p['rub']}₽\nКарта: {CARD_NUMBER}\n\nНажми «Я оплатил» и пришли скриншот.", reply_markup=kb)
 
-@dp.callback_query(F.data.startswith("paid_"))
-async def cb_paid(call: types.CallbackQuery):
+@dp.callback_query_handler(text_startswith="paid_")
+async def cb_paid(call):
     plan = call.data.split("_")[1]
     pending_payments[call.from_user.id] = {"plan": plan}
-    await call.message.answer("📸 Пришли скриншот оплаты одним сообщением-фото.")
+    await call.message.answer("📸 Пришли скриншот.")
 
-@dp.message(F.photo)
-async def on_screenshot(message: types.Message):
-    user_id = message.from_user.id
-    if user_id not in pending_payments:
+@dp.message_handler(content_types=['photo'])
+async def on_screenshot(message):
+    uid = message.from_user.id
+    if uid not in pending_payments:
         return
-    plan = pending_payments[user_id].get("plan", "1month")
+    plan = pending_payments[uid].get("plan", "1month")
     user = message.from_user
     owner_kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"approve_{user.id}_{plan}")],
-        [types.InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject_{user.id}")],
+        [types.InlineKeyboardButton(text="✅ Да", callback_data=f"approve_{user.id}_{plan}")],
+        [types.InlineKeyboardButton(text="❌ Нет", callback_data=f"reject_{user.id}")],
     ])
     try:
-        await bot.send_photo(
-            chat_id=OWNER_ID,
-            photo=message.photo[-1].file_id,
-            caption=(
-                f"💰 *Новая оплата*\n\n"
-                f"👤 Покупатель: @{user.username or user.first_name} (ID: `{user.id}`)\n"
-                f"📦 Тариф: *{PRICES[plan]['label']}* — {PRICES[plan]['rub']}₽"
-            ),
-            parse_mode="Markdown",
-            reply_markup=owner_kb
-        )
-        await message.answer("✅ Скриншот отправлен! Ожидай подтверждения.")
-        pending_payments.pop(user_id, None)
-    except Exception as e:
-        logging.error(f"Ошибка пересылки: {e}")
-        await message.answer("⚠️ Ошибка. Свяжитесь с @ysorn.")
+        await bot.send_photo(OWNER_ID, message.photo[-1].file_id, caption=f"💰 Оплата от @{user.username}\nПлан: {PRICES[plan]['label']}", reply_markup=owner_kb)
+        await message.answer("✅ Отправлено! Жди подтверждения.")
+        pending_payments.pop(uid, None)
+    except:
+        await message.answer("⚠️ Ошибка.")
 
-@dp.callback_query(F.data.startswith("approve_"))
-async def cb_approve(call: types.CallbackQuery):
+@dp.callback_query_handler(text_startswith="approve_")
+async def cb_approve(call):
     if call.from_user.id != OWNER_ID:
-        await call.answer("Только владелец может подтверждать!", show_alert=True)
-        return
+        await call.answer("Только владелец!"); return
     parts = call.data.split("_")
-    user_id = int(parts[1])
-    plan = parts[2]
+    uid = int(parts[1]); plan = parts[2]
     days = PRICES[plan]["days"]
     now = datetime.now()
-    current = subscriptions.get(user_id)
+    current = subscriptions.get(uid)
     new_until = (current + timedelta(days=days)) if (current and current > now) else (now + timedelta(days=days))
-    subscriptions[user_id] = new_until
+    subscriptions[uid] = new_until
     try:
-        await bot.send_message(
-            user_id,
-            f"✅ *Оплата подтверждена!*\n\n"
-            f"💎 Подписка «{PRICES[plan]['label']}» активирована.\n"
-            f"📅 Действует до: *{new_until.strftime('%d.%m.%Y %H:%M')}*",
-            parse_mode="Markdown"
-        )
-    except:
-        pass
-    try:
-        await call.message.edit_caption(caption="✅ Оплата подтверждена")
-    except:
-        pass
-    await call.answer("Подписка активирована ✅")
+        await bot.send_message(uid, f"✅ Оплата подтверждена до {new_until.strftime('%d.%m.%Y %H:%M')}")
+    except: pass
+    await call.message.edit_reply_markup(reply_markup=None)
+    await call.answer("OK")
 
-@dp.callback_query(F.data.startswith("reject_"))
-async def cb_reject(call: types.CallbackQuery):
+@dp.callback_query_handler(text_startswith="reject_")
+async def cb_reject(call):
     if call.from_user.id != OWNER_ID:
-        await call.answer("Только владелец!", show_alert=True)
-        return
-    user_id = int(call.data.split("_")[1])
+        await call.answer("Только владелец!"); return
+    uid = int(call.data.split("_")[1])
     try:
-        await bot.send_message(user_id, "❌ Оплата отклонена. Свяжитесь с @ysorn.")
-    except:
-        pass
-    try:
-        await call.message.edit_caption(caption="❌ Оплата отклонена")
-    except:
-        pass
-    await call.answer("Отклонено")
+        await bot.send_message(uid, "❌ Оплата отклонена.")
+    except: pass
+    await call.message.edit_reply_markup(reply_markup=None)
 
-@dp.callback_query(F.data == "ref")
-async def cb_ref(call: types.CallbackQuery):
+@dp.callback_query_handler(text="ref")
+async def cb_ref(call):
     uname = bot.username or "my_bot"
-    link = f"https://t.me/{uname}?start=ref_{call.from_user.id}"
-    await call.message.answer(f"👥 *Рефералка*\n🔗 `{link}`", parse_mode="Markdown", reply_markup=back_kb())
+    await call.message.answer(f"👥 Ссылка:\nhttps://t.me/{uname}?start=ref_{call.from_user.id}", reply_markup=back_kb())
 
-@dp.callback_query(F.data == "howto")
-async def cb_howto(call: types.CallbackQuery):
-    await call.message.answer("📚 Настройки → Аккаунт → Автоматизация чатов → Подключить бота", reply_markup=back_kb())
+@dp.callback_query_handler(text="howto")
+async def cb_howto(call):
+    await call.message.answer("📚 Настройки → Аккаунт → Автоматизация чатов", reply_markup=back_kb())
 
-@dp.message()
-async def forward_to_owner(message: types.Message):
-    if message.chat.type != "private":
+# ================== BUSINESS КОМАНДЫ ==================
+@dp.message_handler(lambda m: m.text and m.text.startswith("."))
+async def b_commands(message):
+    if message.chat.type == "private":
         return
-    if message.from_user.id == OWNER_ID:
-        return
-    if message.text and message.text.startswith("/"):
-        return
-    try:
-        text = message.text or "[медиа]"
-        user = message.from_user
-        await bot.send_message(
-            OWNER_ID,
-            f"📩 *Сообщение от пользователя*\n\n"
-            f"👤 От: @{user.username or user.first_name} (ID: `{user.id}`)\n"
-            f"📝 Текст: `{text[:500]}`",
-            parse_mode="Markdown"
-        )
-    except Exception as e:
-        logging.error(f"Не смог переслать ЛС: {e}")
-        @dp.business_message(F.text.startswith(".mute"))
-async def b_mute(message: types.Message):
+    t = message.chat.id
+    reply = message.reply_to_message
+    owner_id = await get_owner_id(message.business_connection_id)
     if not await is_owner(message):
         return
     if not await check_business_subscription(message):
         return
     parts = message.text.split()
-    m = int(parts[1]) if len(parts) > 1 else 10
-    mutes[message.chat.id] = datetime.now() + timedelta(minutes=m)
-    get_stats(message.chat.id)["mutes"] += 1
-    await try_delete(message)
-    await message.answer(f"🔇 Мут {m} мин")
+    cmd = parts[0].lower()
 
-@dp.business_message(F.text.startswith(".unmute"))
-async def b_unmute(message: types.Message):
-    if not await is_owner(message):
-        return
-    if not await check_business_subscription(message):
-        return
-    mutes.pop(message.chat.id, None)
-    await try_delete(message)
-    await message.answer("🔊 Мут снят")
-
-@dp.business_message(F.text.startswith(".warn"))
-async def b_warn(message: types.Message):
-    if not await is_owner(message):
-        return
-    if not await check_business_subscription(message):
-        return
-    parts = message.text.split()
-    n = int(parts[1]) if len(parts) > 1 else 1
-    t = message.chat.id
-    warns[t] = min(warns.get(t, 0) + n, WARN_LIMIT)
-    get_stats(t)["warns"] += n
-    text = f"⚠️ *Предупреждений: {warns[t]}/{WARN_LIMIT}*"
-    await try_delete(message)
-    msg_id = warn_messages.get(t)
-    if msg_id:
-        try:
-            await bot(EditMessageText(
-                business_connection_id=message.business_connection_id,
-                chat_id=message.chat.id,
-                message_id=msg_id,
-                text=text,
-                parse_mode="Markdown",
-            ))
-        except:
-            new_msg = await message.answer(text, parse_mode="Markdown")
-            warn_messages[t] = new_msg.message_id
-    else:
-        new_msg = await message.answer(text, parse_mode="Markdown")
-        warn_messages[t] = new_msg.message_id
-    if warns[t] >= WARN_LIMIT:
-        mutes[t] = datetime.now() + timedelta(minutes=WARN_MUTE_MINUTES)
-        try:
-            await bot(EditMessageText(
-                business_connection_id=message.business_connection_id,
-                chat_id=message.chat.id,
-                message_id=warn_messages[t],
-                text=f"⚠️ *Предупреждений: {WARN_LIMIT}/{WARN_LIMIT}*\n🔇 *Мут на {WARN_MUTE_MINUTES} минут!*",
-                parse_mode="Markdown",
-            ))
-        except:
-            pass
-
-@dp.business_message(F.text.startswith(".unwarn"))
-async def b_unwarn(message: types.Message):
-    if not await is_owner(message):
-        return
-    if not await check_business_subscription(message):
-        return
-    t = message.chat.id
-    warns.pop(t, None)
-    mutes.pop(t, None)
-    await try_delete(message)
-    msg_id = warn_messages.pop(t, None)
-    if msg_id:
-        try:
-            await bot(EditMessageText(
-                business_connection_id=message.business_connection_id,
-                chat_id=message.chat.id,
-                message_id=msg_id,
-                text="✅ *Предупреждения сняты. ⚠️ 0/5*",
-                parse_mode="Markdown",
-            ))
-            return
-        except:
-            pass
-    await message.answer("✅ Предупреждения сняты.")
-
-@dp.business_message(F.text == ".del")
-async def b_del(message: types.Message):
-    if not await is_owner(message):
-        return
-    if not await check_business_subscription(message):
-        return
-    reply = message.reply_to_message
-    if reply:
-        try:
-            await bot(DeleteBusinessMessages(
-                business_connection_id=message.business_connection_id,
-                message_ids=[reply.message_id, message.message_id],
-            ))
-            get_stats(message.chat.id)["deleted"] += 1
-        except:
-            pass
-
-@dp.business_message(F.text.startswith(".clear"))
-async def b_clear(message: types.Message):
-    if not await is_owner(message):
-        return
-    if not await check_business_subscription(message):
-        return
-    parts = message.text.split()
-    n = int(parts[1]) if len(parts) > 1 else 5
-    t = message.chat.id
-    if t in message_cache:
-        ids = sorted(message_cache[t].keys())[-n:]
-        try:
-            await bot(DeleteBusinessMessages(
-                business_connection_id=message.business_connection_id,
-                message_ids=ids + [message.message_id],
-            ))
-            get_stats(t)["deleted"] += len(ids)
-        except:
-            pass
-
-@dp.business_message(F.text == ".kick")
-async def b_kick(message: types.Message):
-    if not await is_owner(message):
-        return
-    if not await check_business_subscription(message):
-        return
-    reply = message.reply_to_message
-    if reply:
-        try:
-            await bot(DeleteBusinessMessages(
-                business_connection_id=message.business_connection_id,
-                message_ids=[reply.message_id, message.message_id],
-            ))
-            get_stats(message.chat.id)["deleted"] += 1
-        except:
-            pass
-
-@dp.business_message(F.text == ".pin")
-async def b_pin(message: types.Message):
-    if not await is_owner(message):
-        return
-    if not await check_business_subscription(message):
-        return
-    reply = message.reply_to_message
-    if reply:
-        try:
-            await bot.pin_chat_message(chat_id=message.chat.id, message_id=reply.message_id)
-            await message.answer("📌 Закреплено")
-        except:
-            await message.answer("⚠️ Не смог закрепить")
-    await try_delete(message)
-
-@dp.business_message(F.text.startswith(".spam"))
-async def b_spam(message: types.Message):
-    if not await is_owner(message):
-        return
-    if not await check_business_subscription(message):
-        return
-    await try_delete(message)
-    parts = message.text.split(maxsplit=2)
-    if len(parts) < 3:
-        await message.answer("Использование: `.spam N текст`")
-        return
-    try:
-        n = min(int(parts[1]), 50)
-    except:
-        n = 1
-    for _ in range(n):
-        try:
-            await message.answer(parts[2])
-            await asyncio.sleep(0.15)
-        except:
-            await asyncio.sleep(0.4)
-
-@dp.business_message(F.text.startswith(".st"))
-async def b_st(message: types.Message):
-    if not await is_owner(message):
-        return
-    if not await check_business_subscription(message):
-        return
-    await try_delete(message)
-    text = message.text[3:].strip()
-    if not text:
-        await message.answer("Использование: `.st текст`")
-        return
-    for word in text.split():
-        try:
-            await message.answer(word)
-            await asyncio.sleep(0.15)
-        except:
-            await asyncio.sleep(0.4)
-
-@dp.business_message(F.text.startswith(".echo"))
-async def b_echo(message: types.Message):
-    if not await is_owner(message):
-        return
-    if not await check_business_subscription(message):
-        return
-    await try_delete(message)
-    text = message.text[5:].strip()
-    if text:
+    if cmd == ".mute" and reply:
+        m = int(parts[1]) if len(parts) > 1 else 10
+        mutes[t] = datetime.now() + timedelta(minutes=m)
+        get_stats(t)["mutes"] += 1
+        await try_delete(message)
+        await message.answer(f"🔇 Мут {m} мин")
+    elif cmd == ".unmute":
+        mutes.pop(t, None)
+        await try_delete(message)
+        await message.answer("🔊 Мут снят")
+    elif cmd == ".warn":
+        n = int(parts[1]) if len(parts) > 1 else 1
+        warns[t] = min(warns.get(t, 0) + n, WARN_LIMIT)
+        get_stats(t)["warns"] += n
+        await try_delete(message)
+        text = f"⚠️ Предупреждений: {warns[t]}/{WARN_LIMIT}"
         await message.answer(text)
-
-@dp.business_message(F.text.startswith(".say"))
-async def b_say(message: types.Message):
-    if not await is_owner(message):
-        return
-    if not await check_business_subscription(message):
-        return
-    await try_delete(message)
-    text = message.text[4:].strip()
-    if text:
-        await message.answer(text)
-
-@dp.business_message(F.text.startswith(".roll"))
-async def b_roll(message: types.Message):
-    if not await is_owner(message):
-        return
-    if not await check_business_subscription(message):
-        return
-    parts = message.text.split()
-    try:
+        if warns[t] >= WARN_LIMIT:
+            mutes[t] = datetime.now() + timedelta(minutes=WARN_MUTE_MINUTES)
+    elif cmd == ".unwarn":
+        warns.pop(t, None); mutes.pop(t, None)
+        await try_delete(message)
+        await message.answer("✅ Сброшено")
+    elif cmd == ".del" and reply:
+        await try_delete(reply)
+        await try_delete(message)
+    elif cmd == ".kick" and reply:
+        await try_delete(reply)
+        await try_delete(message)
+    elif cmd == ".clear":
+        n = int(parts[1]) if len(parts) > 1 else 5
+        if t in message_cache:
+            ids = sorted(message_cache[t].keys())[-n:]
+            for mid in ids:
+                try:
+                    await bot.delete_message(t, mid)
+                except: pass
+        await try_delete(message)
+    elif cmd == ".spam":
+        p = message.text.split(maxsplit=2)
+        if len(p) < 3: return
+        try: n = min(int(p[1]), 50)
+        except: n = 1
+        await try_delete(message)
+        for _ in range(n):
+            try: await message.answer(p[2]); await asyncio.sleep(0.2)
+            except: await asyncio.sleep(0.4)
+    elif cmd == ".st":
+        text = message.text[3:].strip()
+        if not text: return
+        await try_delete(message)
+        for word in text.split():
+            try: await message.answer(word); await asyncio.sleep(0.2)
+            except: await asyncio.sleep(0.4)
+    elif cmd == ".echo":
+        text = message.text[5:].strip()
+        if text: await message.answer(text)
+        await try_delete(message)
+    elif cmd == ".say":
+        text = message.text[4:].strip()
+        if text: await message.answer(text)
+        await try_delete(message)
+    elif cmd == ".roll":
         n = int(parts[1]) if len(parts) > 1 else 100
-    except:
-        n = 100
-    result = random.randint(1, n)
-    await try_delete(message)
-    await message.answer(f"🎲 Выпало: *{result}* (из 1–{n})", parse_mode="Markdown")
+        await try_delete(message)
+        await message.answer(f"🎲 {random.randint(1, n)}")
+    elif cmd == ".flip":
+        await try_delete(message)
+        await message.answer(random.choice(["🦅 Орёл", "🪙 Решка"]))
+    elif cmd == ".calc":
+        expr = message.text[5:].strip()
+        try: res = eval(expr, {"__builtins__": None}, {})
+        except: res = "ошибка"
+        await try_delete(message)
+        await message.answer(f"🧮 {expr} = {res}")
+    elif cmd == ".clone":
+        state = parts[1].lower() if len(parts) > 1 else "on"
+        clone[t] = (state == "on")
+        await try_delete(message)
+        await message.answer(f"🔄 Автоповтор {'вкл' if state == 'on' else 'выкл'}")
+    elif cmd == ".silent":
+        state = parts[1].lower() if len(parts) > 1 else "on"
+        silent_mode[t] = (state == "on")
+        await try_delete(message)
+        if state == "off": await message.answer("🔊 Тихий режим выкл")
+    elif cmd == ".stats":
+        s = get_stats(t)
+        await try_delete(message)
+        await message.answer(f"📊 Варнов: {warns.get(t, 0)}/{WARN_LIMIT}\nМут: {'да' if t in mutes else 'нет'}\nУдалено: {s['deleted']}")
+    elif cmd == ".info":
+        await try_delete(message)
+        await message.answer(f"🆔 {t}\nВладелец: {owner_id}\nВ кэше: {len(message_cache.get(t, {}))}")
+    elif cmd == ".history":
+        n = int(parts[1]) if len(parts) > 1 else 10
+        await try_delete(message)
+        if t not in message_cache or not message_cache[t]:
+            await message.answer("📭 История пуста"); return
+        items = sorted(message_cache[t].items(), key=lambda x: x[1]["time"])[-n:]
+        text = f"📜 Последние {len(items)}:\n\n"
+        for mid, d in items:
+            who = "Ты" if d["sender"] == owner_id else "Собеседник"
+            text += f"{who} ({d['time']}): {d['text'][:150]}\n"
+        await message.answer(text[:4000])
 
-@dp.business_message(F.text == ".flip")
-async def b_flip(message: types.Message):
-    if not await is_owner(message):
+# ================== ОБРАБОТКА БИЗНЕС-СООБЩЕНИЙ ==================
+@dp.message_handler(content_types=types.ContentTypes.TEXT)
+async def on_biz_message(message):
+    if message.chat.type == "private":
         return
-    if not await check_business_subscription(message):
-        return
-    result = random.choice(["🦅 Орёл", "🪙 Решка"])
-    await try_delete(message)
-    await message.answer(f"🎲 *{result}*", parse_mode="Markdown")
-
-@dp.business_message(F.text.startswith(".calc"))
-async def b_calc(message: types.Message):
-    if not await is_owner(message):
-        return
-    if not await check_business_subscription(message):
-        return
-    expr = message.text[5:].strip()
-    try:
-        result = eval(expr, {"__builtins__": None}, {})
-    except:
-        result = "ошибка"
-    await try_delete(message)
-    await message.answer(f"🧮 `{expr}` = *{result}*", parse_mode="Markdown")
-
-@dp.business_message(F.text == ".tag")
-async def b_tag(message: types.Message):
-    if not await is_owner(message):
-        return
-    if not await check_business_subscription(message):
-        return
-    try:
-        await message.answer(f"👤 @{message.from_user.username or message.from_user.first_name}")
-    except:
-        pass
-    await try_delete(message)
-
-@dp.business_message(F.text.startswith(".clone"))
-async def b_clone(message: types.Message):
-    if not await is_owner(message):
-        return
-    if not await check_business_subscription(message):
-        return
-    parts = message.text.split()
-    state = parts[1].lower() if len(parts) > 1 else "on"
-    clone[message.chat.id] = (state == "on")
-    await try_delete(message)
-    await message.answer(f"🔄 Автоповтор {'включён' if state == 'on' else 'выключен'}")
-
-@dp.business_message(F.text.startswith(".silent"))
-async def b_silent(message: types.Message):
-    if not await is_owner(message):
-        return
-    if not await check_business_subscription(message):
-        return
-    parts = message.text.split()
-    state = parts[1].lower() if len(parts) > 1 else "on"
-    silent_mode[message.chat.id] = (state == "on")
-    await try_delete(message)
-    if state == "off":
-        await message.answer("🔊 Тихий режим выключен")
-
-@dp.business_message(F.text == ".stats")
-async def b_stats(message: types.Message):
-    if not await is_owner(message):
-        return
-    if not await check_business_subscription(message):
-        return
-    t = message.chat.id
-    s = get_stats(t)
-    text = (
-        f"📊 *Статистика*\n\n"
-        f"👤 Собеседник: `{t}`\n"
-        f"⚠️ Варнов: *{warns.get(t, 0)}/{WARN_LIMIT}*\n"
-        f"🔇 Мут: *{'да' if t in mutes else 'нет'}*\n"
-        f"🗑 Удалено: *{s['deleted']}*\n"
-        f"⚠️ Варнов выдано: *{s['warns']}*\n"
-        f"🔇 Мутов: *{s['mutes']}*"
-    )
-    await try_delete(message)
-    await message.answer(text, parse_mode="Markdown")
-
-@dp.business_message(F.text == ".info")
-async def b_info(message: types.Message):
-    if not await is_owner(message):
-        return
-    if not await check_business_subscription(message):
-        return
-    owner_id = await get_owner_id(message.business_connection_id)
-    t = message.chat.id
-    text = (
-        f"👤 *Инфо*\n\n"
-        f"🆔 ID: `{t}`\n"
-        f"👤 Владелец: `{owner_id}`\n"
-        f"📅 В кэше: *{len(message_cache.get(t, {}))}*\n"
-        f"🤖 @{message.from_user.username or '—'}"
-    )
-    await try_delete(message)
-    await message.answer(text, parse_mode="Markdown")
-
-@dp.business_message(F.text.startswith(".history"))
-async def b_history(message: types.Message):
-    if not await is_owner(message):
-        return
-    if not await check_business_subscription(message):
-        return
-    t = message.chat.id
-    parts = message.text.split()
-    n = int(parts[1]) if len(parts) > 1 else 10
-    await try_delete(message)
-    if t not in message_cache or not message_cache[t]:
-        await message.answer("📭 История пуста.")
-        return
-    items = sorted(message_cache[t].items(), key=lambda x: x[1]["time"])[-n:]
-    owner_id = await get_owner_id(message.business_connection_id)
-    text = f"📜 *Последние {len(items)}:*\n\n"
-    for msg_id, data in items:
-        sender = "Ты" if data["sender"] == owner_id else "Собеседник"
-        text += f"*{sender}* ({data['time']}):\n`{data['text'][:200]}`\n\n"
-    if len(text) > 4000:
-        text = text[:4000] + "\n..."
-    await message.answer(text, parse_mode="Markdown")
-    @dp.business_message()
-async def b_default(message: types.Message):
     t = message.chat.id
     owner_id = await get_owner_id(message.business_connection_id)
     msg_from = message.from_user.id if message.from_user else 0
 
     if message.text and message.text.startswith(".") and msg_from != owner_id:
         return
-
     if silent_mode.get(t) and msg_from == owner_id:
         return
 
-    if t in message_cache and message.message_id in message_cache[t]:
-        old = message_cache[t][message.message_id]
-        new_text = message.text or "[медиа]"
-        if old["text"] != new_text and msg_from != owner_id:
-            try:
-                await bot.send_message(
-                    owner_id,
-                    f"✏️ *Изменено*\n\n"
-                    f"👤 @{message.from_user.username or message.from_user.first_name}\n"
-                    f"📝 Было: `{old['text'][:200]}`\n"
-                    f"📝 Стало: `{new_text[:200]}`",
-                    parse_mode="Markdown"
-                )
-            except:
-                pass
-        message_cache[t][message.message_id]["text"] = new_text
-
     if t not in message_cache:
         message_cache[t] = {}
-    message_cache[t][message.message_id] = {
-        "text": message.text or "[медиа]",
-        "time": message.date.strftime("%Y-%m-%d %H:%M:%S"),
-        "sender": msg_from,
-    }
+    message_cache[t][message.message_id] = {"text": message.text or "[медиа]", "time": message.date.strftime("%Y-%m-%d %H:%M:%S"), "sender": msg_from}
     if len(message_cache[t]) > 200:
         oldest = sorted(message_cache[t].keys())[0]
         message_cache[t].pop(oldest, None)
@@ -774,32 +392,20 @@ async def b_default(message: types.Message):
     if t in mutes and mutes[t] > datetime.now():
         if msg_from != owner_id:
             try:
-                await bot(DeleteBusinessMessages(
-                    business_connection_id=message.business_connection_id,
-                    message_ids=[message.message_id],
-                ))
+                await message.delete()
                 get_stats(t)["deleted"] += 1
-            except:
-                pass
+            except: pass
             return
-
     if t in mutes and mutes[t] <= datetime.now():
         mutes.pop(t, None); warns.pop(t, None)
-
     if clone.get(t) and message.text and msg_from != owner_id:
         await message.answer(message.text)
 
-async def main():
-    try:
-        await bot.delete_webhook(drop_pending_updates=True)
-        print("✅ Webhook удалён")
-    except Exception as e:
-        print(f"Ошибка: {e}")
-    me = await bot.get_me()
-    bot.username = me.username
-    print(f"✅ Bot started: @{me.username}")
-    await dp.start_polling(bot, drop_pending_updates=True)
-
+# ================== ЗАПУСК ==================
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
-    asyncio.run(main())
+    me = bot.get_me() if False else None
+    logging.info("Starting bot...")
+    executor.start_polling(dp, skip_updates=True)
+ENDOFPYTHON
+~ $ /data/data/com.termux/files/home/app.py
