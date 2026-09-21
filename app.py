@@ -420,3 +420,64 @@ async def b_commands(message):
             who = "Ты" if d["sender"] == owner_id else "Собеседник"
             text += f"{who} ({d['time']}): {d['text'][:150]}\n"
         await message.answer(text[:4000])
+        # ================== ОБРАБОТКА БИЗНЕС-СООБЩЕНИЙ ==================
+@dp.message_handler(content_types=types.ContentTypes.TEXT)
+async def on_biz_message(message):
+    if message.chat.type == "private":
+        return
+    t = message.chat.id
+    owner_id = await get_owner_id(message.business_connection_id)
+    msg_from = message.from_user.id if message.from_user else 0
+
+    if message.text and message.text.startswith(".") and msg_from != owner_id:
+        return
+
+    if silent_mode.get(t) and msg_from == owner_id:
+        return
+
+    if t not in message_cache:
+        message_cache[t] = {}
+    message_cache[t][message.message_id] = {
+        "text": message.text or "[медиа]",
+        "time": message.date.strftime("%Y-%m-%d %H:%M:%S"),
+        "sender": msg_from
+    }
+    if len(message_cache[t]) > 200:
+        oldest = sorted(message_cache[t].keys())[0]
+        message_cache[t].pop(oldest, None)
+
+    if t in mutes and mutes[t] > datetime.now():
+        if msg_from != owner_id:
+            try:
+                await message.delete()
+                get_stats(t)["deleted"] += 1
+            except:
+                pass
+            return
+
+    if t in mutes and mutes[t] <= datetime.now():
+        mutes.pop(t, None)
+        warns.pop(t, None)
+
+    if clone.get(t) and message.text and msg_from != owner_id:
+        await message.answer(message.text)
+
+# ================== УВЕДОМЛЕНИЯ ОБ ИЗМЕНЕНИЯХ ==================
+@dp.edited_message_handler()
+async def on_edit(message):
+    if message.chat.type == "private":
+        return
+    owner_id = await get_owner_id(message.business_connection_id)
+    msg_from = message.from_user.id if message.from_user else 0
+    if msg_from == owner_id:
+        return
+    try:
+        await bot.send_message(owner_id, f"✏️ Изменено:\n{message.text[:300]}")
+    except:
+        pass
+
+# ================== ЗАПУСК ==================
+if __name__ == "__main__":
+    threading.Thread(target=run_flask, daemon=True).start()
+    logging.info("Starting bot...")
+    executor.start_polling(dp, skip_updates=True)
