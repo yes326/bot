@@ -166,27 +166,28 @@ async def cb_back(call):
 @dp.callback_query_handler(text="cmd_list")
 async def cb_cmds(call):
     await call.message.answer(
-        "📖 Команды:\n"
-        ".mute N — мут на N минут\n"
-        ".unmute — снять мут\n"
-        ".warn N — предупреждение\n"
-        ".unwarn — сбросить\n"
-        ".kick — удалить сообщение\n"
-        ".del — удалить сообщение\n"
-        ".clear N — очистить N сообщений\n"
-        ".st текст — отправить по словам\n"
-        ".spam N текст — отправить N раз\n"
-        ".echo текст — повторить\n"
-        ".say текст — сказать\n"
-        ".roll N — случайное число\n"
-        ".flip — орёл/решка\n"
-        ".calc выражение — калькулятор\n"
-        ".clone on/off — автоповтор\n"
-        ".silent on/off — тихий режим\n"
-        ".history N — история\n"
-        ".stats — статистика\n"
-        ".info — информация",
-        reply_markup=back_kb())
+        "📖 <b>Команды</b> (нажми, чтобы скопировать):\n\n"
+        "<code>.mute N</code> — мут на N минут\n"
+        "<code>.unmute</code> — снять мут\n"
+        "<code>.warn N</code> — предупреждение\n"
+        "<code>.unwarn</code> — сбросить\n"
+        "<code>.kick</code> — удалить сообщение\n"
+        "<code>.del</code> — удалить сообщение\n"
+        "<code>.clear N</code> — очистить N сообщений\n"
+        "<code>.st текст</code> — отправить по словам\n"
+        "<code>.spam N текст</code> — отправить N раз\n"
+        "<code>.echo текст</code> — повторить\n"
+        "<code>.say текст</code> — сказать\n"
+        "<code>.roll N</code> — случайное число\n"
+        "<code>.flip</code> — орёл/решка\n"
+        "<code>.calc выражение</code> — калькулятор\n"
+        "<code>.clone on/off</code> — автоповтор\n"
+        "<code>.silent on/off</code> — тихий режим\n"
+        "<code>.history N</code> — история\n"
+        "<code>.stats</code> — статистика\n"
+        "<code>.info</code> — информация",
+        reply_markup=back_kb(),
+        parse_mode="HTML")
     await call.answer()
 
 @dp.callback_query_handler(text="sub_menu")
@@ -229,7 +230,7 @@ async def cb_pay(call):
         [types.InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"paid_{plan}")],
         [types.InlineKeyboardButton(text="🔙 Назад", callback_data="sub_menu")],
     ])
-    await call.message.answer(f"💳 {p['label']} — {p['rub']}₽\nКарта: {CARD_NUMBER}\n\nНажми «Я оплатил» и пришли скриншот.", reply_markup=kb)
+    await call.message.answer(f"💳 {p['label']} — {p['rub']}₽\nКарта: <code>{CARD_NUMBER}</code>\n\nНажми «Я оплатил» и пришли скриншот.", reply_markup=kb, parse_mode="HTML")
     await call.answer()
 
 @dp.callback_query_handler(text_startswith="paid_")
@@ -293,7 +294,8 @@ async def cb_reject(call):
 @dp.callback_query_handler(text="ref")
 async def cb_ref(call):
     uname = bot.username or "my_bot"
-    await call.message.answer(f"👥 Ссылка:\nhttps://t.me/{uname}?start=ref_{call.from_user.id}", reply_markup=back_kb())
+    link = f"https://t.me/{uname}?start=ref_{call.from_user.id}"
+    await call.message.answer(f"👥 Ссылка:\n<code>{link}</code>", reply_markup=back_kb(), parse_mode="HTML")
     await call.answer()
 
 @dp.callback_query_handler(text="howto")
@@ -351,7 +353,6 @@ async def b_commands(message):
         if reply:
             await try_delete(reply)
         await try_delete(message)
-        await message.answer("👢 Удалено")
     elif cmd == ".clear":
         n = int(parts[1]) if len(parts) > 1 else 5
         if t in message_cache:
@@ -430,7 +431,7 @@ async def b_commands(message):
         await message.answer(f"📊 Варнов: {warns.get(t, 0)}/{WARN_LIMIT}\nМут: {'да' if t in mutes else 'нет'}\nУдалено: {s['deleted']}")
     elif cmd == ".info":
         await try_delete(message)
-        await message.answer(f"🆔 {t}\nВладелец: {owner_id}\nВ кэше: {len(message_cache.get(t, {}))}")
+        await message.answer(f"🆔 <code>{t}</code>\nВладелец: <code>{owner_id}</code>\nВ кэше: {len(message_cache.get(t, {}))}", parse_mode="HTML")
     elif cmd == ".history":
         n = int(parts[1]) if len(parts) > 1 else 10
         await try_delete(message)
