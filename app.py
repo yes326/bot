@@ -57,7 +57,8 @@ async def check_subscription(user_id):
     try:
         member = await bot.get_chat_member(CHANNEL_ID, user_id)
         return member.status not in ("left", "kicked")
-    except:
+    except Exception as e:
+        logging.warning(f"Error checking sub: {e}")
         return True
 
 def subscribe_kb():
@@ -76,7 +77,8 @@ async def get_owner_id(bcid):
         oid = conn.user.id
         business_owners[bcid] = oid
         return oid
-    except:
+    except Exception as e:
+        logging.error(f"Failed to fetch business connection {bcid}: {e}")
         return OWNER_ID
 
 def get_stats(cid):
@@ -87,7 +89,7 @@ def get_stats(cid):
 async def try_delete(message):
     try:
         await bot.delete_message(message.chat.id, message.message_id)
-    except:
+    except Exception:
         pass
 
 def main_menu():
@@ -103,25 +105,15 @@ def back_kb():
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_main")]
     ])
 
-def plans_kb(user_id=None):
-    rows = []
-    if user_id is not None and user_id not in used_trials:
-        rows.append([InlineKeyboardButton(text=f"🎁 Пробный период ({TRIAL_DAYS} дней)", callback_data="trial")])
-    for k, v in PRICES.items():
-        rows.append([InlineKeyboardButton(text=f"{v['label']} — {v['rub']}₽", callback_data=f"pay_{k}")])
-    rows.append([InlineKeyboardButton(text="🔙 Назад", callback_data="back_main")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-# Меню бота в ЛС самого бота
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message):
-    uid = message.from_user.id
+    uid = message.from_user.id if message.from_user else 0
     if not await check_subscription(uid):
         await message.answer("⚠️ Для использования бота подпишитесь на канал:", reply_markup=subscribe_kb())
         return
     try:
         await message.answer_photo(FSInputFile(BANNER_PATH), caption="🏠 Главное меню", reply_markup=main_menu())
-    except:
+    except Exception:
         await message.answer("🏠 Главное меню", reply_markup=main_menu())
 
 @dp.callback_query(F.data == "check_sub")
@@ -129,7 +121,7 @@ async def cb_check_sub(call: types.CallbackQuery):
     if await check_subscription(call.from_user.id):
         try:
             await call.message.delete()
-        except:
+        except Exception:
             pass
         await call.message.answer("🏠 Главное меню", reply_markup=main_menu())
     else:
@@ -145,182 +137,195 @@ async def cb_cmds(call: types.CallbackQuery):
         "📖 Команды:\n.mute N — Замутить собеседника\n.unmute — Снять мут\n.warn N — Выдать варн\n.unwarn — Снять варны\n.del — Удалить последнее сообщение собеседника\n.clear N — Очистить N сообщений\n.st текст\n.spam N текст\n.echo текст\n.say текст\n.roll N\n.flip\n.calc выражение\n.clone on/off\n.silent on/off\n.history N\n.stats\n.info",
         reply_markup=back_kb())
 
-# --- Обработка команд и сообщений в Telegram Business ---
+# --- Обработка команд и сообщений ---
 
 async def handle_business_logic(message: types.Message):
-    t = message.chat.id
-    reply = message.reply_to_message
-    owner_id = await get_owner_id(message.business_connection_id)
-    msg_from = message.from_user.id if message.from_user else 0
+    try:
+        t = message.chat.id
+        reply = message.reply_to_message
+        bcid = getattr(message, "business_connection_id", None)
+        owner_id = await get_owner_id(bcid)
+        
+        msg_from = message.from_user.id if message.from_user else 0
 
-    # Если отправлена команда от владельца бизнес-аккаунта
-    if message.text and message.text.startswith("."):
-        parts = message.text.split()
-        cmd = parts[0].lower()
+        # В бизнес-чатах сообщения владельца часто приходят с message.from_user.id == owner_id 
+        # либо когда отправляете вы, owner_id совпадает с OWNER_ID
+        is_owner = (msg_from == owner_id or msg_from == OWNER_ID or (bcid and msg_from == owner_id))
 
-        if cmd == ".mute":
-            m = int(parts[1]) if len(parts) > 1 else 10
-            mutes[t] = datetime.now() + timedelta(minutes=m)
-            get_stats(t)["mutes"] += 1
-            await try_delete(message)
-            await message.answer(f"🔇 Собеседник замучен на {m} мин")
-            return
-
-        elif cmd == ".unmute":
-            mutes.pop(t, None)
-            await try_delete(message)
-            await message.answer("🔊 Мут снят")
-            return
-
-        elif cmd == ".warn":
-            n = int(parts[1]) if len(parts) > 1 else 1
-            warns[t] = min(warns.get(t, 0) + n, WARN_LIMIT)
-            get_stats(t)["warns"] += n
-            await try_delete(message)
-            await message.answer(f"⚠️ Предупреждений у собеседника: {warns[t]}/{WARN_LIMIT}")
-            if warns[t] >= WARN_LIMIT:
-                mutes[t] = datetime.now() + timedelta(minutes=WARN_MUTE_MINUTES)
-                await message.answer(f"🔇 Достигнут лимит варнов! Мут на {WARN_MUTE_MINUTES} мин")
-            return
-
-        elif cmd == ".unwarn":
-            warns.pop(t, None)
-            mutes.pop(t, None)
-            await try_delete(message)
-            await message.answer("✅ Предупреждения и мут сброшены")
-            return
-
-        elif cmd == ".del":
-            if reply:
-                await try_delete(reply)
-            else:
-                if t in message_cache and message_cache[t]:
-                    last_msg_id = list(message_cache[t].keys())[-1]
-                    try:
-                        await bot.delete_message(t, last_msg_id)
-                    except:
-                        pass
-            await try_delete(message)
-            return
-
-        elif cmd == ".clear":
-            n = int(parts[1]) if len(parts) > 1 else 5
-            if t in message_cache:
-                ids = sorted(message_cache[t].keys())[-n:]
-                for mid in ids:
-                    try:
-                        await bot.delete_message(t, mid)
-                    except:
-                        pass
-            await try_delete(message)
-            return
-
-        elif cmd == ".spam":
-            p = message.text.split(maxsplit=2)
-            if len(p) >= 3:
-                try:
-                    n = min(int(p[1]), 50)
-                except:
-                    n = 1
-                await try_delete(message)
-                for _ in range(n):
-                    try:
-                        await message.answer(p[2])
-                        await asyncio.sleep(0.2)
-                    except:
-                        await asyncio.sleep(0.4)
-            return
-
-        elif cmd == ".st":
-            text = message.text[3:].strip()
-            if text:
-                await try_delete(message)
-                for word in text.split():
-                    try:
-                        await message.answer(word)
-                        await asyncio.sleep(0.2)
-                    except:
-                        await asyncio.sleep(0.4)
-            return
-
-        elif cmd == ".echo" or cmd == ".say":
-            text = message.text.split(maxsplit=1)[1] if len(message.text.split()) > 1 else ""
-            await try_delete(message)
-            if text:
-                await message.answer(text)
-            return
-
-        elif cmd == ".roll":
-            n = int(parts[1]) if len(parts) > 1 else 100
-            await try_delete(message)
-            await message.answer(f"🎲 {random.randint(1, n)}")
-            return
-
-        elif cmd == ".flip":
-            await try_delete(message)
-            await message.answer(random.choice(["🦅 Орёл", "🪙 Решка"]))
-            return
-
-        elif cmd == ".calc":
-            expr = message.text[5:].strip()
-            try:
-                res = eval(expr, {"__builtins__": None}, {})
-            except:
-                res = "ошибка"
-            await try_delete(message)
-            await message.answer(f"🧮 {expr} = {res}")
-            return
-
-        elif cmd == ".clone":
-            state = parts[1].lower() if len(parts) > 1 else "on"
-            clone[t] = (state == "on")
-            await try_delete(message)
-            await message.answer(f"🔄 Автоповтор {'вкл' if state == 'on' else 'выкл'}")
-            return
-
-        elif cmd == ".silent":
-            state = parts[1].lower() if len(parts) > 1 else "on"
-            silent_mode[t] = (state == "on")
-            await try_delete(message)
-            if state == "off":
-                await message.answer("🔊 Тихий режим выкл")
-            return
-
-        elif cmd == ".stats":
-            s = get_stats(t)
-            await try_delete(message)
-            await message.answer(f"📊 Варнов: {warns.get(t, 0)}/{WARN_LIMIT}\nМут: {'да' if t in mutes else 'нет'}\nУдалено: {s['deleted']}")
-            return
-
-        elif cmd == ".info":
-            await try_delete(message)
-            await message.answer(f"🆔 Чат: {t}\nВладелец: {owner_id}\nВ кэше сообщений: {len(message_cache.get(t, {}))}")
-            return
-
-    # --- Кэширование и удаление при муте ---
-    if t not in message_cache:
-        message_cache[t] = {}
-    message_cache[t][message.message_id] = {
-        "text": message.text or "[медиа]",
-        "time": message.date.strftime("%Y-%m-%d %H:%M:%S"),
-        "sender": msg_from
-    }
-
-    if t in mutes:
-        if mutes[t] > datetime.now():
-            if msg_from != owner_id:
-                try:
-                    await message.delete()
-                    get_stats(t)["deleted"] += 1
-                except:
-                    pass
+        # --- ОБРАБОТКА КОМАНД С ТОЧКОЙ ---
+        if message.text and message.text.startswith("."):
+            # Команды разрешено выполнять ТОЛЬКО владельцу
+            if not is_owner:
                 return
-        else:
-            mutes.pop(t, None)
-            warns.pop(t, None)
 
-    if clone.get(t) and message.text and msg_from != owner_id:
-        await message.answer(message.text)
+            parts = message.text.split()
+            cmd = parts[0].lower()
+
+            if cmd == ".mute":
+                m = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 10
+                mutes[t] = datetime.now() + timedelta(minutes=m)
+                get_stats(t)["mutes"] += 1
+                await try_delete(message)
+                await bot.send_message(t, f"🔇 Собеседник замучен на {m} мин", business_connection_id=bcid)
+                return
+
+            elif cmd == ".unmute":
+                mutes.pop(t, None)
+                await try_delete(message)
+                await bot.send_message(t, "🔊 Мут снят", business_connection_id=bcid)
+                return
+
+            elif cmd == ".warn":
+                n = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1
+                warns[t] = min(warns.get(t, 0) + n, WARN_LIMIT)
+                get_stats(t)["warns"] += n
+                await try_delete(message)
+                await bot.send_message(t, f"⚠️ Предупреждений у собеседника: {warns[t]}/{WARN_LIMIT}", business_connection_id=bcid)
+                if warns[t] >= WARN_LIMIT:
+                    mutes[t] = datetime.now() + timedelta(minutes=WARN_MUTE_MINUTES)
+                    await bot.send_message(t, f"🔇 Достигнут лимит варнов! Мут на {WARN_MUTE_MINUTES} мин", business_connection_id=bcid)
+                return
+
+            elif cmd == ".unwarn":
+                warns.pop(t, None)
+                mutes.pop(t, None)
+                await try_delete(message)
+                await bot.send_message(t, "✅ Предупреждения и мут сброшены", business_connection_id=bcid)
+                return
+
+            elif cmd == ".del":
+                if reply:
+                    await try_delete(reply)
+                else:
+                    if t in message_cache and message_cache[t]:
+                        last_msg_id = list(message_cache[t].keys())[-1]
+                        try:
+                            await bot.delete_message(t, last_msg_id)
+                        except Exception:
+                            pass
+                await try_delete(message)
+                return
+
+            elif cmd == ".clear":
+                n = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 5
+                if t in message_cache:
+                    ids = sorted(message_cache[t].keys())[-n:]
+                    for mid in ids:
+                        try:
+                            await bot.delete_message(t, mid)
+                        except Exception:
+                            pass
+                await try_delete(message)
+                return
+
+            elif cmd == ".spam":
+                p = message.text.split(maxsplit=2)
+                if len(p) >= 3:
+                    n = min(int(p[1]), 50) if p[1].isdigit() else 1
+                    await try_delete(message)
+                    for _ in range(n):
+                        try:
+                            await bot.send_message(t, p[2], business_connection_id=bcid)
+                            await asyncio.sleep(0.2)
+                        except Exception:
+                            await asyncio.sleep(0.4)
+                return
+
+            elif cmd == ".st":
+                text = message.text[3:].strip()
+                if text:
+                    await try_delete(message)
+                    for word in text.split():
+                        try:
+                            await bot.send_message(t, word, business_connection_id=bcid)
+                            await asyncio.sleep(0.2)
+                        except Exception:
+                            await asyncio.sleep(0.4)
+                return
+
+            elif cmd in (".echo", ".say"):
+                text = message.text.split(maxsplit=1)[1] if len(message.text.split()) > 1 else ""
+                await try_delete(message)
+                if text:
+                    await bot.send_message(t, text, business_connection_id=bcid)
+                return
+
+            elif cmd == ".roll":
+                n = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 100
+                await try_delete(message)
+                await bot.send_message(t, f"🎲 {random.randint(1, n)}", business_connection_id=bcid)
+                return
+
+            elif cmd == ".flip":
+                await try_delete(message)
+                await bot.send_message(t, random.choice(["🦅 Орёл", "🪙 Решка"]), business_connection_id=bcid)
+                return
+
+            elif cmd == ".calc":
+                expr = message.text[5:].strip()
+                try:
+                    res = eval(expr, {"__builtins__": None}, {})
+                except Exception:
+                    res = "ошибка"
+                await try_delete(message)
+                await bot.send_message(t, f"🧮 {expr} = {res}", business_connection_id=bcid)
+                return
+
+            elif cmd == ".clone":
+                state = parts[1].lower() if len(parts) > 1 else "on"
+                clone[t] = (state == "on")
+                await try_delete(message)
+                await bot.send_message(t, f"🔄 Автоповтор {'вкл' if state == 'on' else 'выкл'}", business_connection_id=bcid)
+                return
+
+            elif cmd == ".silent":
+                state = parts[1].lower() if len(parts) > 1 else "on"
+                silent_mode[t] = (state == "on")
+                await try_delete(message)
+                if state == "off":
+                    await bot.send_message(t, "🔊 Тихий режим выкл", business_connection_id=bcid)
+                return
+
+            elif cmd == ".stats":
+                s = get_stats(t)
+                await try_delete(message)
+                await bot.send_message(t, f"📊 Варнов: {warns.get(t, 0)}/{WARN_LIMIT}\nМут: {'да' if t in mutes else 'нет'}\nУдалено: {s['deleted']}", business_connection_id=bcid)
+                return
+
+            elif cmd == ".info":
+                await try_delete(message)
+                await bot.send_message(t, f"🆔 Чат: {t}\nВладелец: {owner_id}\nВ кэше сообщений: {len(message_cache.get(t, {}))}", business_connection_id=bcid)
+                return
+
+        # --- КЭШИРОВАНИЕ И МУТ ---
+        if t not in message_cache:
+            message_cache[t] = {}
+        message_cache[t][message.message_id] = {
+            "text": message.text or "[медиа]",
+            "time": message.date.strftime("%Y-%m-%d %H:%M:%S"),
+            "sender": msg_from
+        }
+
+        # ПРОВЕРКА МУТА
+        if t in mutes:
+            if mutes[t] > datetime.now():
+                # Удаляем ТОЛЬКО сообщения собеседника
+                if not is_owner:
+                    try:
+                        await message.delete()
+                        get_stats(t)["deleted"] += 1
+                    except Exception as e:
+                        logging.warning(f"Failed to delete muted message: {e}")
+                    return
+            else:
+                mutes.pop(t, None)
+                warns.pop(t, None)
+
+        if clone.get(t) and message.text and not is_owner:
+            await bot.send_message(t, message.text, business_connection_id=bcid)
+
+    except Exception as e:
+        logging.error(f"Error handling business logic: {e}", exc_info=True)
 
 
 @dp.business_message()
@@ -335,8 +340,8 @@ async def on_regular_message(message: types.Message):
 async def main():
     threading.Thread(target=run_flask, daemon=True).start()
     logging.info("Starting bot...")
-    await dp.start_polling(bot, skip_updates=True)
+    await dp.start_polling(bot, drop_pending_updates=True)
 
 if __name__ == "__main__":
     asyncio.run(main())
-  
+    
