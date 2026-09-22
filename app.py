@@ -26,7 +26,7 @@ TRIAL_DAYS = 7
 WARN_LIMIT = 5
 WARN_MUTE_MINUTES = 5
 MAX_SPAM = 50
-DELAY = 0.15  # задержка между сообщениями
+DELAY = 0.15
 
 BANNER_PATH = os.path.join(os.path.dirname(__file__), "IMG_20260918_155302_695.jpg")
 
@@ -305,13 +305,21 @@ async def cb_howto(call):
     await call.message.answer("📚 Настройки → Аккаунт → Автоматизация чатов", reply_markup=back_kb())
     await call.answer()
 
-@dp.message_handler(lambda m: m.text and m.text.startswith("."))
+# ============================================================
+# ВАЖНО: b_commands объявлен ВЫШЕ on_biz_message.
+# Так команды с точкой обрабатываются ПЕРВЫМИ.
+# ============================================================
+@dp.message_handler(lambda m: m.text and m.text.startswith("."), content_types=types.ContentTypes.TEXT)
 async def b_commands(message):
     t = message.chat.id
     reply = message.reply_to_message
 
     # В ЛС — команды доступны всем. В бизнес-чатах — только владельцу.
     if message.chat.type == "private":
+        # Проверка подписки на канал
+        if not await check_subscription(message.from_user.id):
+            await message.answer("⚠️ Подпишись на канал:", reply_markup=subscribe_kb())
+            return
         owner_id = message.from_user.id
     else:
         owner_id = await get_owner_id(message.business_connection_id)
@@ -448,7 +456,7 @@ async def b_commands(message):
 
 @dp.message_handler(content_types=types.ContentTypes.TEXT)
 async def on_biz_message(message):
-    # Пропускаем команды с точкой
+    # Пропускаем команды — их обрабатывает b_commands (объявлен выше)
     if message.text and message.text.startswith("."):
         return
     if message.chat.type == "private":
