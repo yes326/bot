@@ -269,12 +269,14 @@ async def cb_howto(call):
 
 @dp.message_handler(lambda m: m.text and m.text.startswith("."))
 async def b_commands(message):
+    logging.info(f"CMD: '{message.text}' | from={message.from_user.id} | chat_type={message.chat.type} | bcid={message.business_connection_id} | chat_id={message.chat.id}")
     if message.chat.type == "private":
         return
     t = message.chat.id
     reply = message.reply_to_message
     owner_id = await get_owner_id(message.business_connection_id)
     if not await is_owner(message):
+        logging.info(f"REJECTED: owner_id={owner_id} | from={message.from_user.id} | OWNER_ID={OWNER_ID}")
         return
     if not await check_business_subscription(message):
         return
@@ -451,7 +453,7 @@ async def on_edit(message):
     if msg_from == owner_id:
         return
     try:
-        await bot.send_message(owner_id, f"✏️ Изменено:\n{message.text[:300]}")
+        await bot.send_message(owner_id, f"✏️ Изменилось:\n{message.text[:300]}")
     except:
         pass
 
@@ -459,4 +461,3 @@ if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     logging.info("Starting bot...")
     executor.start_polling(dp, skip_updates=True)
-ENDOFPYTHON
