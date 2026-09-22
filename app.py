@@ -306,11 +306,15 @@ async def cb_howto(call):
     await call.answer()
 
 # ============================================================
-# КОМАНДЫ — объявлены ПЕРВЫМИ.
-# В бизнес-чатах команды принимаются по OWNER_ID.
+# КОМАНДЫ — с логированием, чтобы видеть, доходит ли команда
 # ============================================================
 @dp.message_handler(lambda m: m.text and m.text.startswith("."))
 async def b_commands(message):
+    logging.info(
+        f"CMD: '{message.text}' | from={message.from_user.id} | "
+        f"chat_type={message.chat.type} | bcid={message.business_connection_id} | "
+        f"chat_id={message.chat.id}"
+    )
     t = message.chat.id
     reply = message.reply_to_message
 
@@ -320,12 +324,10 @@ async def b_commands(message):
             return
         owner_id = message.from_user.id
     else:
-        # В бизнес-чатах команды принимаются ТОЛЬКО от OWNER_ID
         if message.from_user.id != OWNER_ID:
+            logging.info(f"CMD rejected: from={message.from_user.id} != OWNER_ID={OWNER_ID}")
             return
         owner_id = OWNER_ID
-        if not await check_subscription(OWNER_ID):
-            return
 
     parts = message.text.split()
     cmd = parts[0].lower()
@@ -455,6 +457,11 @@ async def b_commands(message):
 
 @dp.message_handler(content_types=types.ContentTypes.TEXT)
 async def on_biz_message(message):
+    logging.info(
+        f"BIZ: '{(message.text[:50] if message.text else '[медиа]')}' | "
+        f"from={message.from_user.id} | chat_type={message.chat.type} | "
+        f"bcid={message.business_connection_id}"
+    )
     if message.text and message.text.startswith("."):
         return
     if message.chat.type == "private":
