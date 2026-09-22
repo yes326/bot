@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-AntiSpam Defender Bot — Business-бот с удалением и мут-системой.
+AntiSpam Defender Bot — webhook-версия для Render.
 """
 
 import asyncio
@@ -53,12 +53,8 @@ WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = os.getenv("RENDER_EXTERNAL_URL", "http://localhost:8000") + WEBHOOK_PATH
 PORT = int(os.getenv("PORT", 8000))
 
-MAX_DELETE_PER_CALL = 100
-SPAM_DELAY = 0.15   # секунд между сообщениями в .spam и .st
-
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 log = logging.getLogger("bot")
-
 
 # ============================================================
 # БАЗА ДАННЫХ
@@ -85,28 +81,6 @@ async def init_db():
                 amount INTEGER,
                 status TEXT DEFAULT 'pending',
                 created_at TEXT
-            )
-        """)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS warns (
-                chat_id INTEGER,
-                target_user_id INTEGER,
-                count INTEGER DEFAULT 0,
-                PRIMARY KEY (chat_id, target_user_id)
-            )
-        """)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS mutes (
-                chat_id INTEGER,
-                target_user_id INTEGER,
-                until TEXT,
-                PRIMARY KEY (chat_id, target_user_id)
-            )
-        """)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS clones (
-                chat_id INTEGER PRIMARY KEY,
-                is_on INTEGER DEFAULT 0
             )
         """)
         await db.commit()
@@ -215,87 +189,6 @@ async def confirm_payment(pid):
     return p
 
 
-# ---------- Warn ----------
-async def add_warns(chat_id, target_user_id, n):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT INTO warns (chat_id, target_user_id, count) VALUES (?,?,?) "
-            "ON CONFLICT(chat_id, target_user_id) DO UPDATE SET count = count + ?",
-            (chat_id, target_user_id, n, n),
-        )
-        await db.commit()
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute(
-            "SELECT count FROM warns WHERE chat_id=? AND target_user_id=?",
-            (chat_id, target_user_id),
-        )
-        row = await cur.fetchone()
-        return row["count"] if row else n
-
-
-async def reset_warns(chat_id, target_user_id):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "UPDATE warns SET count=0 WHERE chat_id=? AND target_user_id=?",
-            (chat_id, target_user_id),
-        )
-        await db.commit()
-
-
-# ---------- Mute ----------
-async def set_mute(chat_id, target_user_id, minutes):
-    until = (datetime.utcnow() + timedelta(minutes=minutes)).isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT INTO mutes (chat_id, target_user_id, until) VALUES (?,?,?) "
-            "ON CONFLICT(chat_id, target_user_id) DO UPDATE SET until=?",
-            (chat_id, target_user_id, until, until),
-        )
-        await db.commit()
-    return until
-
-
-async def clear_mute(chat_id, target_user_id):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "DELETE FROM mutes WHERE chat_id=? AND target_user_id=?",
-            (chat_id, target_user_id),
-        )
-        await db.commit()
-
-
-async def is_muted(chat_id, target_user_id):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute(
-            "SELECT until FROM mutes WHERE chat_id=? AND target_user_id=?",
-            (chat_id, target_user_id),
-        )
-        row = await cur.fetchone()
-        if not row:
-            return False
-        return datetime.fromisoformat(row["until"]) > datetime.utcnow()
-
-
-# ---------- Clone ----------
-async def set_clone(chat_id, on):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT INTO clones (chat_id, is_on) VALUES (?,?) "
-            "ON CONFLICT(chat_id) DO UPDATE SET is_on=?",
-            (chat_id, 1 if on else 0, 1 if on else 0),
-        )
-        await db.commit()
-
-
-async def is_clone_on(chat_id):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute("SELECT is_on FROM clones WHERE chat_id=?", (chat_id,))
-        row = await cur.fetchone()
-        return bool(row and row["is_on"])
-
-
 # ============================================================
 # ПРОВЕРКА ПОДПИСКИ
 # ============================================================
@@ -337,11 +230,11 @@ PROFILE_TEXT = (
 
 COMMANDS_TEXT = (
     "📖 <b>Команды бота</b>\n\n"
-    "<code>.spam N текст</code> — отправить N раз (без лимита)\n"
-    "<code>.warn N</code> — выдать N предупреждений собеседнику\n"
-    "<code>.mute N</code> — замутить собеседника на N минут\n"
-    "<code>.unwarn</code> — снять предупреждения\n"
-    "<code>.unmute</code> — снять мут\n"
+    "<code>.spam N текст</code> — отправить N раз (макс 50)\n"
+    "<code>.warn N</code> — выдать N предупреждений\n"
+    "<code>.mute N</code> — мут на N\n"
+    "<code>.unwarn</code> — снять warn\n"
+    "<code>.unmute</code> — снять mute\n"
     "<code>.st текст</code> — каждое слово отдельным сообщением\n"
     "<code>.clone on/off</code> — автоповтор собеседника\n"
     "<code>.help</code> — этот список"
@@ -393,136 +286,11 @@ def back_menu():
 
 
 # ============================================================
-# РОУТЕР
+# ХЕНДЛЕРЫ
 # ============================================================
 router = Router()
 
 
-# ---------- Обработка всех бизнес-сообщений ----------
-@router.business_message()
-async def handle_business_message(msg: Message, bot: Bot):
-    if not msg.business_connection_id:
-        return
-
-    chat_id = msg.chat.id
-    sender_id = msg.from_user.id if msg.from_user else None
-    text = msg.text or ""
-
-    # 1. Замученный собеседник — удаляем его сообщение
-    if sender_id and await is_muted(chat_id, sender_id):
-        try:
-            await bot.delete_business_messages(
-                business_connection_id=msg.business_connection_id,
-                message_ids=[msg.message_id],
-            )
-        except Exception as e:
-            log.warning(f"failed to delete muted msg: {e}")
-        return
-
-    # 2. Клон — повторяем за собеседником
-    if sender_id and text and await is_clone_on(chat_id):
-        if not text.startswith("."):
-            try:
-                await bot.send_message(chat_id, text)
-            except Exception as e:
-                log.warning(f"clone failed: {e}")
-
-
-# ---------- Команды в бизнес-чате ----------
-@router.business_message(F.text.startswith("."))
-async def business_commands(msg: Message, bot: Bot):
-    if not await has_access(msg.from_user.id):
-        await msg.answer("❌ Подписка неактивна. Купи подписку в меню.")
-        return
-
-    text = msg.text.strip()
-    chat_id = msg.chat.id
-
-    # .help
-    if text == ".help":
-        await msg.answer(COMMANDS_TEXT, parse_mode="HTML")
-        return
-
-    # .spam N текст — задержка 0.15 сек
-    m = re.match(r"^\.spam\s+(\d+)\s+(.+)", text, re.DOTALL)
-    if m:
-        n = int(m.group(1))
-        body = m.group(2)
-        for _ in range(n):
-            try:
-                await bot.send_message(chat_id, body)
-            except Exception as e:
-                log.warning(f"spam error: {e}")
-                break
-            await asyncio.sleep(SPAM_DELAY)
-        return
-
-    # .st текст — задержка 0.15 сек
-    m = re.match(r"^\.st\s+(.+)", text, re.DOTALL)
-    if m:
-        for w in m.group(1).split():
-            await bot.send_message(chat_id, w)
-            await asyncio.sleep(SPAM_DELAY)
-        return
-
-    # .warn N
-    m = re.match(r"^\.warn\s+(\d+)", text)
-    if m:
-        n = int(m.group(1))
-        total = await add_warns(chat_id, chat_id, n)
-        try:
-            await bot.send_message(chat_id, f"⚠️ Тебе выдано предупреждение ({n}). Всего: {total}.")
-        except Exception:
-            pass
-        await msg.answer(f"✅ Выдано {n} предупреждений. Всего: {total}.")
-        return
-
-    # .unwarn
-    if text == ".unwarn":
-        await reset_warns(chat_id, chat_id)
-        try:
-            await bot.send_message(chat_id, "✅ Предупреждения сняты.")
-        except Exception:
-            pass
-        return
-
-    # .mute N (минуты)
-    m = re.match(r"^\.mute\s+(\d+)", text)
-    if m:
-        n = int(m.group(1))
-        if n <= 0:
-            await clear_mute(chat_id, chat_id)
-            await msg.answer("🔊 Мут снят.")
-            return
-        await set_mute(chat_id, chat_id, n)
-        try:
-            await bot.send_message(chat_id, f"🔇 Ты замучен на {n} мин.")
-        except Exception:
-            pass
-        await msg.answer(f"✅ Мут на {n} мин.")
-        return
-
-    # .unmute
-    if text == ".unmute":
-        await clear_mute(chat_id, chat_id)
-        try:
-            await bot.send_message(chat_id, "🔊 Мут снят.")
-        except Exception:
-            pass
-        return
-
-    # .clone on/off
-    m = re.match(r"^\.clone\s+(on|off)", text)
-    if m:
-        on = m.group(1) == "on"
-        await set_clone(chat_id, on)
-        await msg.answer(f"👥 Автоповтор: <b>{'включён' if on else 'выключен'}</b>", parse_mode="HTML")
-        return
-
-    await msg.answer("❓ Неизвестная команда. Напиши .help")
-
-
-# ---------- Меню и /start ----------
 async def send_main_menu(msg: Message):
     u = await get_user(msg.from_user.id)
     if u and not u["trial_used"]:
@@ -617,3 +385,177 @@ async def choose_tariff(cb: CallbackQuery):
         "Выбери способ оплаты:"
     )
     await cb.message.edit_text(text, reply_markup=pay_method_menu(t), parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("stars_"))
+async def pay_stars(cb: CallbackQuery, bot: Bot):
+    t = cb.data.split("_")[1]
+    days, rub, stars = TARIFFS[t]
+    await bot.send_invoice(
+        chat_id=cb.from_user.id,
+        title=f"Подписка на {days} дней",
+        description=f"Тариф {days} дней",
+        payload=f"sub_{t}_{cb.from_user.id}",
+        provider_token="",
+        currency="XTR",
+        prices=[LabeledPrice(label="Подписка", amount=stars)],
+    )
+    await cb.answer()
+
+
+@router.pre_checkout_query()
+async def pre_checkout(q: PreCheckoutQuery):
+    await q.answer(ok=True)
+
+
+@router.message(F.successful_payment)
+async def on_paid(msg: Message):
+    payload = msg.successful_payment.invoice_payload
+    t = payload.split("_")[1]
+    await extend_subscription(msg.from_user.id, TARIFFS[t][0])
+    await msg.answer("✅ Оплата прошла! Подписка активирована 💎")
+
+
+@router.callback_query(F.data.startswith("card_"))
+async def pay_card(cb: CallbackQuery):
+    t = cb.data.split("_")[1]
+    days, rub, stars = TARIFFS[t]
+    pid = await add_payment(cb.from_user.id, t, "card", rub)
+    text = (
+        "💳 <b>Оплата картой</b>\n\n"
+        f"Сумма: <b>{rub}₽</b>\n"
+        f"Срок: <b>{days} дней</b>\n\n"
+        "Нажми «Я оплатил», чтобы получить реквизиты."
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"paid_{pid}")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="buy")],
+    ])
+    await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("paid_"))
+async def paid_click(cb: CallbackQuery, bot: Bot):
+    pid = int(cb.data.split("_")[1])
+    await cb.message.edit_text(
+        "💳 Переведи сумму на карту:\n\n"
+        f"<code>{CARD_NUMBER}</code>\n\n"
+        f"После перевода пришли скриншот админу @{SUPPORT_USERNAME}.\n"
+        f"Заявка №<b>{pid}</b> — после подтверждения подписка активируется.",
+        parse_mode="HTML",
+        reply_markup=back_menu(),
+    )
+    for admin in ADMIN_IDS:
+        try:
+            await bot.send_message(
+                admin,
+                f"💰 Заявка №{pid}\n"
+                f"Юзер: {cb.from_user.full_name} (@{cb.from_user.username})\n"
+                f"ID: <code>{cb.from_user.id}</code>\n\n"
+                f"Подтвердить: <code>/confirm {pid}</code>",
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            log.warning(f"admin notify failed: {e}")
+    await cb.answer("Заявка отправлена ✅")
+
+
+@router.message(F.text.startswith("/confirm"))
+async def admin_confirm(msg: Message, bot: Bot):
+    if msg.from_user.id not in ADMIN_IDS:
+        return
+    try:
+        pid = int(msg.text.split()[1])
+    except (IndexError, ValueError):
+        await msg.answer("Использование: /confirm <id>")
+        return
+    p = await confirm_payment(pid)
+    if not p:
+        await msg.answer("Заявка не найдена")
+        return
+    await msg.answer(f"✅ Заявка {pid} подтверждена.")
+    try:
+        await bot.send_message(p["user_id"], "✅ Подписка активирована! 🎉")
+    except Exception:
+        pass
+
+
+# ---------- Рефералка ----------
+@router.callback_query(F.data == "ref")
+async def ref_menu(cb: CallbackQuery, bot: Bot):
+    me = await bot.me()
+    link = f"https://t.me/{me.username}?start=ref_{cb.from_user.id}"
+    u = await get_user(cb.from_user.id)
+    refs = u["ref_count"] or 0
+    text = (
+        "👥 <b>Реферальная система</b>\n\n"
+        f"Приглашай друзей и получай <b>+{REFERRAL_REWARD_DAYS} дней</b> "
+        f"за каждые {REFERRAL_TARGET} человек!\n\n"
+        f"Твоя ссылка:\n<code>{link}</code>\n\n"
+        f"👤 Приглашено: <b>{refs}</b> / {REFERRAL_TARGET}"
+    )
+    await cb.message.edit_text(text, reply_markup=back_menu(), parse_mode="HTML")
+
+
+# ---------- Dot-команды ----------
+@router.message(F.text.startswith("."))
+async def dot_commands(msg: Message):
+    if not await has_access(msg.from_user.id):
+        await msg.answer("❌ Подписка неактивна. Купи подписку в меню.")
+        return
+
+    text = msg.text.strip()
+
+    if text == ".help":
+        await msg.answer(COMMANDS_TEXT, parse_mode="HTML")
+        return
+
+    m = re.match(r"\.spam\s+(\d+)\s+(.+)", text, re.DOTALL)
+    if m:
+        n = min(int(m.group(1)), 50)
+        body = m.group(2)
+        for _ in range(n):
+            await msg.answer(body)
+            await asyncio.sleep(0.4)
+        return
+
+    m = re.match(r"\.st\s+(.+)", text, re.DOTALL)
+    if m:
+        for w in m.group(1).split():
+            await msg.answer(w)
+            await asyncio.sleep(0.3)
+        return
+
+    if text in (".warn", ".mute", ".unwarn", ".unmute") or text.startswith(".clone"):
+        await msg.answer("⚠️ Эта команда требует userbot (Telethon). Пока недоступна.")
+        return
+
+    await msg.answer("❓ Неизвестная команда. Напиши .help")
+
+
+# ============================================================
+# WEBHOOK ЗАПУСК ДЛЯ RENDER
+# ============================================================
+async def on_startup(bot: Bot):
+    await bot.set_webhook(WEBHOOK_URL, drop_pending_updates=True)
+    log.info(f"Webhook установлен: {WEBHOOK_URL}")
+
+
+def main():
+    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    dp = Dispatcher()
+    dp.include_router(router)
+    dp.startup.register(on_startup)
+
+    app = web.Application()
+    webhook_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
+    webhook_handler.register(app, path=WEBHOOK_PATH)
+    setup_application(app, dp, bot=bot)
+
+    log.info(f"Bot started (webhook) on port {PORT}")
+    web.run_app(app, host="0.0.0.0", port=PORT)
+
+
+if __name__ == "__main__":
+    asyncio.run(init_db())
+    main()
