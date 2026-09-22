@@ -548,6 +548,11 @@ def main():
     dp.startup.register(on_startup)
 
     app = web.Application()
+
+    async def health(request):
+        return web.Response(text="OK")
+    app.router.add_get("/", health)
+
     webhook_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
     webhook_handler.register(app, path=WEBHOOK_PATH)
     setup_application(app, dp, bot=bot)
