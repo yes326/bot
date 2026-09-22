@@ -25,6 +25,8 @@ PRICES = {
 TRIAL_DAYS = 7
 WARN_LIMIT = 5
 WARN_MUTE_MINUTES = 5
+MAX_SPAM = 50
+DELAY = 0.15  # задержка между сообщениями
 
 BANNER_PATH = os.path.join(os.path.dirname(__file__), "IMG_20260918_155302_695.jpg")
 
@@ -166,7 +168,7 @@ async def cb_back(call):
 @dp.callback_query_handler(text="cmd_list")
 async def cb_cmds(call):
     await call.message.answer(
-        "📖 <b>Команды</b> (нажми, чтобы скопировать):\n\n"
+        "📖 <b>Команды</b> (нажми на команду, чтобы скопировать):\n\n"
         "<code>.mute N</code> — мут на N минут\n"
         "<code>.unmute</code> — снять мут\n"
         "<code>.warn N</code> — предупреждение\n"
@@ -175,7 +177,7 @@ async def cb_cmds(call):
         "<code>.del</code> — удалить сообщение\n"
         "<code>.clear N</code> — очистить N сообщений\n"
         "<code>.st текст</code> — отправить по словам\n"
-        "<code>.spam N текст</code> — отправить N раз\n"
+        "<code>.spam N текст</code> — отправить N раз (до 50)\n"
         "<code>.echo текст</code> — повторить\n"
         "<code>.say текст</code> — сказать\n"
         "<code>.roll N</code> — случайное число\n"
@@ -308,9 +310,8 @@ async def b_commands(message):
     t = message.chat.id
     reply = message.reply_to_message
 
+    # В ЛС — команды доступны всем. В бизнес-чатах — только владельцу.
     if message.chat.type == "private":
-        if message.from_user.id != OWNER_ID:
-            return
         owner_id = message.from_user.id
     else:
         owner_id = await get_owner_id(message.business_connection_id)
@@ -368,16 +369,16 @@ async def b_commands(message):
         if len(p) < 3:
             return
         try:
-            n = min(int(p[1]), 50)
+            n = min(int(p[1]), MAX_SPAM)
         except:
             n = 1
         await try_delete(message)
         for _ in range(n):
             try:
                 await message.answer(p[2])
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(DELAY)
             except:
-                await asyncio.sleep(0.4)
+                await asyncio.sleep(DELAY)
     elif cmd == ".st":
         text = message.text[3:].strip()
         if not text:
@@ -386,9 +387,9 @@ async def b_commands(message):
         for word in text.split():
             try:
                 await message.answer(word)
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(DELAY)
             except:
-                await asyncio.sleep(0.4)
+                await asyncio.sleep(DELAY)
     elif cmd == ".echo":
         text = message.text[5:].strip()
         if text:
@@ -447,14 +448,15 @@ async def b_commands(message):
 
 @dp.message_handler(content_types=types.ContentTypes.TEXT)
 async def on_biz_message(message):
+    # Пропускаем команды с точкой
+    if message.text and message.text.startswith("."):
+        return
     if message.chat.type == "private":
         return
     t = message.chat.id
     owner_id = await get_owner_id(message.business_connection_id)
     msg_from = message.from_user.id if message.from_user else 0
 
-    if message.text and message.text.startswith(".") and msg_from != owner_id:
-        return
     if silent_mode.get(t) and msg_from == owner_id:
         return
 
