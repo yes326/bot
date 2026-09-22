@@ -269,7 +269,8 @@ async def cb_howto(call):
 
 @dp.message_handler(lambda m: m.text and m.text.startswith("."))
 async def b_commands(message):
-    if message.chat.type == "private":
+    # Работает только для бизнес-подключения (не для обычных ЛС с ботом)
+    if not message.business_connection_id:
         return
     t = message.chat.id
     reply = message.reply_to_message
@@ -404,7 +405,8 @@ async def b_commands(message):
 
 @dp.message_handler(content_types=types.ContentTypes.TEXT)
 async def on_biz_message(message):
-    if message.chat.type == "private":
+    # Работает только для бизнес-подключения (не для обычных ЛС с ботом)
+    if not message.business_connection_id:
         return
     t = message.chat.id
     owner_id = await get_owner_id(message.business_connection_id)
@@ -444,7 +446,7 @@ async def on_biz_message(message):
 
 @dp.edited_message_handler()
 async def on_edit(message):
-    if message.chat.type == "private":
+    if not message.business_connection_id:
         return
     owner_id = await get_owner_id(message.business_connection_id)
     msg_from = message.from_user.id if message.from_user else 0
