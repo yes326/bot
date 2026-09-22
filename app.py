@@ -306,8 +306,8 @@ async def cb_howto(call):
     await call.answer()
 
 # ============================================================
-# КОМАНДЫ — только lambda-фильтр, БЕЗ content_types.
-# Так ловятся и в ЛС, и в бизнес-чатах.
+# КОМАНДЫ — объявлены ПЕРВЫМИ.
+# В бизнес-чатах команды принимаются по OWNER_ID.
 # ============================================================
 @dp.message_handler(lambda m: m.text and m.text.startswith("."))
 async def b_commands(message):
@@ -320,10 +320,11 @@ async def b_commands(message):
             return
         owner_id = message.from_user.id
     else:
-        owner_id = await get_owner_id(message.business_connection_id)
-        if not await is_owner(message):
+        # В бизнес-чатах команды принимаются ТОЛЬКО от OWNER_ID
+        if message.from_user.id != OWNER_ID:
             return
-        if not await check_business_subscription(message):
+        owner_id = OWNER_ID
+        if not await check_subscription(OWNER_ID):
             return
 
     parts = message.text.split()
