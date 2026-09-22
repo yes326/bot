@@ -1,463 +1,545 @@
-import os
-import logging
-import threading
+# -*- coding: utf-8 -*-
+"""
+AntiSpam Defender Bot — всё в одном файле.
+Деплой: Render (webhook) / локально (polling).
+"""
+
 import asyncio
-import random
+import logging
+import os
+import re
 from datetime import datetime, timedelta
-from flask import Flask
-from aiogram import Bot, Dispatcher, types
-from aiogram.contrib.fsm_storage.memory import MemoryStorage
-from aiogram.utils import executor
-from aiogram.types import InputFile
 
-BOT_TOKEN = "8881768476:AAHubc_E40pzStJpiEMXbkwcg1lKbs5jzqA"
-CARD_NUMBER = "2204320449407461"
-OWNER_USERNAME = "ysorn"
-OWNER_ID = 8502858396
+import aiosqlite
+from aiogram import Bot, Dispatcher, F, Router
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
+from aiogram.filters import CommandStart
+from aiogram.types import (
+    CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
+    LabeledPrice, Message, PreCheckoutQuery,
+)
+from dotenv import load_dotenv
+
+# ============================================================
+# КОНФИГ
+# ============================================================
+load_dotenv()
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
+
+CHANNEL_ID = -1004412177691                    # канал для проверки подписки
 CHANNEL_LINK = "https://t.me/+MV9rTn9A6L1hNGNi"
-CHANNEL_ID = -1004412177691
+CARD_NUMBER = "2204320449407461"               # НЕ показывать в меню
+SUPPORT_USERNAME = "ysorn"
 
-PRICES = {
-    "1month": {"rub": 100, "days": 30, "label": "1 месяц"},
-    "6months": {"rub": 599, "days": 180, "label": "6 месяцев"},
-    "1year": {"rub": 1199, "days": 365, "label": "1 год"},
+PERMANENT_USERNAMES = {"ysorn", "null_aspect"} # вечная подписка
+
+TARIFFS = {
+    "1m": (30,  100,  50),
+    "6m": (180, 599,  250),
+    "1y": (365, 1199, 550),
 }
-TRIAL_DAYS = 7
-WARN_LIMIT = 5
-WARN_MUTE_MINUTES = 5
 
-BANNER_PATH = os.path.join(os.path.dirname(__file__), "IMG_20260918_155302_695.jpg")
+FREE_TRIAL_DAYS = 7
+REFERRAL_TARGET = 5
+REFERRAL_REWARD_DAYS = 7
 
-business_owners = {}
-subscriptions = {}
-pending_payments = {}
-used_trials = set()
-message_cache = {}
-silent_mode = {}
+DB_PATH = "bot.db"
 
-flask_app = Flask(__name__)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+log = logging.getLogger("bot")
 
-@flask_app.route('/')
-def home():
-    return "Bot is running"
+# ============================================================
+# БАЗА ДАННЫХ
+# ============================================================
+async def init_db():
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                username TEXT,
+                sub_until TEXT,
+                is_permanent INTEGER DEFAULT 0,
+                trial_used INTEGER DEFAULT 0,
+                referrer_id INTEGER,
+                ref_count INTEGER DEFAULT 0
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS payments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                tariff TEXT,
+                method TEXT,
+                amount INTEGER,
+                status TEXT DEFAULT 'pending',
+                created_at TEXT
+            )
+        """)
+        await db.commit()
 
-def run_flask():
-    port = int(os.environ.get("PORT", 10000))
-    flask_app.run(host='0.0.0.0', port=port)
 
-logging.basicConfig(level=logging.INFO)
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher(bot, storage=MemoryStorage())
+async def get_user(user_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
+        return await cur.fetchone()
 
-warns = {}
-mutes = {}
-clone = {}
-warn_messages = {}
-stats = {}
 
-async def check_subscription(user_id):
-    try:
-        member = await bot.get_chat_member(CHANNEL_ID, user_id)
-        return member.status not in ("left", "kicked")
-    except:
+async def create_user(user_id, username, referrer_id=None):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO users (user_id, username, referrer_id) VALUES (?,?,?)",
+            (user_id, username, referrer_id),
+        )
+        await db.commit()
+    if referrer_id and referrer_id != user_id:
+        await add_referral(referrer_id)
+
+
+async def add_referral(referrer_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE users SET ref_count = ref_count + 1 WHERE user_id=?",
+            (referrer_id,),
+        )
+        await db.commit()
+    u = await get_user(referrer_id)
+    if u and u["ref_count"] and u["ref_count"] % REFERRAL_TARGET == 0:
+        await extend_subscription(referrer_id, REFERRAL_REWARD_DAYS)
         return True
+    return False
 
-def subscribe_kb():
-    return types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="📢 Подписаться", url=CHANNEL_LINK)],
-        [types.InlineKeyboardButton(text="✅ Я подписался", callback_data="check_sub")],
+
+async def activate_trial(user_id):
+    until = (datetime.utcnow() + timedelta(days=FREE_TRIAL_DAYS)).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE users SET sub_until=?, trial_used=1 WHERE user_id=?",
+            (until, user_id),
+        )
+        await db.commit()
+
+
+async def extend_subscription(user_id, days):
+    u = await get_user(user_id)
+    now = datetime.utcnow()
+    if u and u["sub_until"]:
+        base = max(datetime.fromisoformat(u["sub_until"]), now)
+    else:
+        base = now
+    until = (base + timedelta(days=days)).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE users SET sub_until=? WHERE user_id=?", (until, user_id))
+        await db.commit()
+
+
+async def set_permanent(user_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE users SET is_permanent=1 WHERE user_id=?", (user_id,))
+        await db.commit()
+
+
+async def has_access(user_id):
+    u = await get_user(user_id)
+    if not u:
+        return False
+    if u["is_permanent"]:
+        return True
+    if not u["sub_until"]:
+        return False
+    return datetime.fromisoformat(u["sub_until"]) > datetime.utcnow()
+
+
+async def days_left(user_id):
+    u = await get_user(user_id)
+    if not u or not u["sub_until"]:
+        return 0
+    d = datetime.fromisoformat(u["sub_until"]) - datetime.utcnow()
+    return max(0, d.days)
+
+
+async def add_payment(user_id, tariff, method, amount):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT INTO payments (user_id, tariff, method, amount, created_at) VALUES (?,?,?,?,?)",
+            (user_id, tariff, method, amount, datetime.utcnow().isoformat()),
+        )
+        await db.commit()
+        return cur.lastrowid
+
+
+async def confirm_payment(pid):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM payments WHERE id=?", (pid,))
+        p = await cur.fetchone()
+        if not p:
+            return None
+        await db.execute("UPDATE payments SET status='confirmed' WHERE id=?", (pid,))
+        await db.commit()
+    await extend_subscription(p["user_id"], TARIFFS[p["tariff"]][0])
+    return p
+
+
+# ============================================================
+# ПРОВЕРКА ПОДПИСКИ
+# ============================================================
+async def is_subscribed(bot, user_id):
+    try:
+        m = await bot.get_chat_member(CHANNEL_ID, user_id)
+        return m.status in ("member", "administrator", "creator")
+    except Exception as e:
+        log.warning(f"sub check failed: {e}")
+        return False
+
+
+# ============================================================
+# ТЕКСТЫ
+# ============================================================
+SUB_REQUIRED_TEXT = (
+    "👋 <b>Привет!</b>\n\n"
+    "Чтобы пользоваться ботом, подпишись на наш канал:\n"
+    f"👉 {CHANNEL_LINK}\n\n"
+    "После подписки нажми <b>«Проверить подписку»</b>."
+)
+
+MAIN_MENU_TEXT = (
+    "🎛 <b>Главное меню</b>\n\n"
+    "Привет, <b>{name}</b>!\n\n"
+    "📌 <b>Инструкция по подключению:</b>\n"
+    "Настройки → Аккаунт → Автоматизация чатов → Подключаем бота\n\n"
+    "После подключения придёт сообщение: <b>«бот подключен»</b>.\n\n"
+    "Выбери действие ниже 👇"
+)
+
+PROFILE_TEXT = (
+    "👤 <b>Профиль</b>\n\n"
+    "Имя: <b>{name}</b>\n"
+    "Подписка: {status}\n"
+    "👥 Приглашено: <b>{refs}</b> / {target}\n\n"
+    f"За каждые {REFERRAL_TARGET} приглашённых — <b>+{REFERRAL_REWARD_DAYS} дней</b>!"
+)
+
+COMMANDS_TEXT = (
+    "📖 <b>Команды бота</b>\n\n"
+    "<code>.spam N текст</code> — отправить N раз (макс 50)\n"
+    "<code>.warn N</code> — выдать N предупреждений\n"
+    "<code>.mute N</code> — мут на N\n"
+    "<code>.unwarn</code> — снять warn\n"
+    "<code>.unmute</code> — снять mute\n"
+    "<code>.st текст</code> — каждое слово отдельным сообщением\n"
+    "<code>.clone on/off</code> — автоповтор собеседника\n"
+    "<code>.help</code> — этот список"
+)
+
+TARIFFS_TEXT = "💎 <b>Выбери тариф:</b>"
+
+# ============================================================
+# КЛАВИАТУРЫ
+# ============================================================
+def sub_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📢 Подписаться", url=CHANNEL_LINK)],
+        [InlineKeyboardButton(text="✅ Проверить подписку", callback_data="check_sub")],
     ])
 
-async def get_owner_id(bcid):
-    if not bcid:
-        return None
-    if bcid in business_owners:
-        return business_owners[bcid]
-    try:
-        conn = await bot.get_business_connection(bcid)
-        oid = conn.user.id
-        business_owners[bcid] = oid
-        return oid
-    except:
-        return None
-
-async def is_owner(message):
-    oid = await get_owner_id(message.business_connection_id)
-    return oid is not None and message.from_user.id == oid
-
-async def check_business_subscription(message):
-    oid = await get_owner_id(message.business_connection_id)
-    if oid is None:
-        return False
-    if not await check_subscription(oid):
-        try:
-            await message.answer(f"⚠️ Подпишись на канал:\n{CHANNEL_LINK}")
-        except:
-            pass
-        return False
-    return True
-
-def get_stats(cid):
-    if cid not in stats:
-        stats[cid] = {"deleted": 0, "warns": 0, "mutes": 0}
-    return stats[cid]
-
-async def try_delete(message):
-    try:
-        await bot.delete_message(message.chat.id, message.message_id)
-    except:
-        pass
 
 def main_menu():
-    return types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="📖 Команды", callback_data="cmd_list")],
-        [types.InlineKeyboardButton(text="💎 Подписка", callback_data="sub_menu")],
-        [types.InlineKeyboardButton(text="👥 Друг", callback_data="ref")],
-        [types.InlineKeyboardButton(text="📚 Как подключить", callback_data="howto")],
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💎 Купить подписку", callback_data="buy")],
+        [InlineKeyboardButton(text="👥 Реферальная система", callback_data="ref")],
+        [InlineKeyboardButton(text="📖 Команды", callback_data="cmds")],
+        [InlineKeyboardButton(text="👤 Мой профиль", callback_data="profile")],
     ])
 
-def back_kb():
-    return types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="🔙 Назад", callback_data="back_main")]
+
+def tariffs_menu():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="1 месяц — 100₽ / 50⭐", callback_data="tariff_1m")],
+        [InlineKeyboardButton(text="6 месяцев — 599₽ / 250⭐", callback_data="tariff_6m")],
+        [InlineKeyboardButton(text="1 год — 1199₽ / 550⭐", callback_data="tariff_1y")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_menu")],
     ])
 
-def plans_kb(user_id=None):
-    rows = []
-    if user_id is not None and user_id not in used_trials:
-        rows.append([types.InlineKeyboardButton(text=f"🎁 Пробный период ({TRIAL_DAYS} дней)", callback_data="trial")])
-    for k, v in PRICES.items():
-        rows.append([types.InlineKeyboardButton(text=f"{v['label']} — {v['rub']}₽", callback_data=f"pay_{k}")])
-    rows.append([types.InlineKeyboardButton(text="🔙 Назад", callback_data="back_main")])
-    return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
-@dp.message_handler(commands=['start'])
-async def start_cmd(message):
-    uid = message.from_user.id
-    if not await check_subscription(uid):
-        await message.answer("⚠️ Подпишись на канал:", reply_markup=subscribe_kb())
-        return
-    try:
-        await message.answer_photo(InputFile(BANNER_PATH), caption="🏠 Главное меню", reply_markup=main_menu())
-    except:
-        await message.answer("🏠 Главное меню", reply_markup=main_menu())
+def pay_method_menu(tariff):
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⭐ Оплатить звёздами", callback_data=f"stars_{tariff}")],
+        [InlineKeyboardButton(text="💳 Оплатить картой", callback_data=f"card_{tariff}")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="buy")],
+    ])
 
-@dp.callback_query_handler(text="check_sub")
-async def cb_check_sub(call):
-    if await check_subscription(call.from_user.id):
+
+def back_menu():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅️ В меню", callback_data="back_menu")],
+    ])
+
+
+# ============================================================
+# ХЕНДЛЕРЫ
+# ============================================================
+router = Router()
+
+
+async def send_main_menu(msg: Message):
+    u = await get_user(msg.from_user.id)
+    if u and not u["trial_used"]:
+        await activate_trial(msg.from_user.id)
+    await msg.answer(
+        MAIN_MENU_TEXT.format(name=msg.from_user.full_name),
+        reply_markup=main_menu(),
+        parse_mode="HTML",
+    )
+
+
+@router.message(CommandStart())
+async def cmd_start(msg: Message, bot: Bot):
+    args = msg.text.split()
+    referrer_id = None
+    if len(args) > 1 and args[1].startswith("ref_"):
         try:
-            await call.message.delete()
-        except:
+            referrer_id = int(args[1][4:])
+        except ValueError:
             pass
-        await call.message.answer("🏠 Главное меню", reply_markup=main_menu())
+
+    await create_user(msg.from_user.id, msg.from_user.username or "", referrer_id)
+
+    if msg.from_user.username in PERMANENT_USERNAMES:
+        await set_permanent(msg.from_user.id)
+
+    if not await is_subscribed(bot, msg.from_user.id):
+        await msg.answer(SUB_REQUIRED_TEXT, reply_markup=sub_keyboard())
+        return
+
+    await send_main_menu(msg)
+
+
+@router.callback_query(F.data == "check_sub")
+async def check_sub(cb: CallbackQuery, bot: Bot):
+    if await is_subscribed(bot, cb.from_user.id):
+        await cb.message.delete()
+        await send_main_menu(cb.message)
     else:
-        await call.answer("❌ Не подписан!", show_alert=True)
+        await cb.answer("❌ Ты ещё не подписался!", show_alert=True)
 
-@dp.callback_query_handler(text="back_main")
-async def cb_back(call):
-    await call.message.edit_text("🏠 Главное меню", reply_markup=main_menu())
 
-@dp.callback_query_handler(text="cmd_list")
-async def cb_cmds(call):
-    await call.message.answer(
-        "📖 Команды:\n.mute N\n.unmute\n.warn N\n.unwarn\n.kick\n.del\n.clear N\n.st текст\n.spam N текст\n.echo текст\n.say текст\n.roll N\n.flip\n.calc выражение\n.clone on/off\n.silent on/off\n.history N\n.stats\n.info",
-        reply_markup=back_kb())
+@router.callback_query(F.data == "back_menu")
+async def back_menu_cb(cb: CallbackQuery):
+    await cb.message.edit_text(
+        MAIN_MENU_TEXT.format(name=cb.from_user.full_name),
+        reply_markup=main_menu(),
+        parse_mode="HTML",
+    )
 
-@dp.callback_query_handler(text="sub_menu")
-async def cb_sub(call):
-    uid = call.from_user.id
-    now = datetime.now()
-    current = subscriptions.get(uid)
-    status = "не активна"
-    if current and current > now:
-        days_left = (current - now).days
-        status = f"активна до {current.strftime('%d.%m.%Y')} ({days_left} дн.)"
-    trial_text = ""
-    if uid not in used_trials:
-        trial_text = f"🎁 Пробный период — {TRIAL_DAYS} дней\n\n"
-    await call.message.answer(f"💎 Подписка\n\n📌 Статус: {status}\n\n{trial_text}Выбери 👇", reply_markup=plans_kb(uid))
 
-@dp.callback_query_handler(text="trial")
-async def cb_trial(call):
-    uid = call.from_user.id
-    now = datetime.now()
-    if uid in used_trials:
-        await call.answer("Уже использовал!", show_alert=True)
-        return
-    current = subscriptions.get(uid)
-    if current and current > now:
-        await call.answer("Уже есть подписка!", show_alert=True)
-        return
-    used_trials.add(uid)
-    until = now + timedelta(days=TRIAL_DAYS)
-    subscriptions[uid] = until
-    await call.message.answer(f"🎁 Пробный до {until.strftime('%d.%m.%Y %H:%M')}")
+@router.callback_query(F.data == "profile")
+async def profile(cb: CallbackQuery):
+    u = await get_user(cb.from_user.id)
+    if u["is_permanent"]:
+        status = "♾ Вечная подписка"
+    elif u["sub_until"] and await has_access(cb.from_user.id):
+        status = f"✅ Активна ({await days_left(cb.from_user.id)} дн.)"
+    else:
+        status = "❌ Неактивна"
+    await cb.message.edit_text(
+        PROFILE_TEXT.format(
+            name=cb.from_user.full_name,
+            status=status,
+            refs=u["ref_count"] or 0,
+            target=REFERRAL_TARGET,
+        ),
+        reply_markup=back_menu(),
+        parse_mode="HTML",
+    )
 
-@dp.callback_query_handler(text_startswith="pay_")
-async def cb_pay(call):
-    plan = call.data.split("_")[1]
-    p = PRICES[plan]
-    kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"paid_{plan}")],
-        [types.InlineKeyboardButton(text="🔙 Назад", callback_data="sub_menu")],
+
+@router.callback_query(F.data == "cmds")
+async def cmds_cb(cb: CallbackQuery):
+    await cb.message.edit_text(COMMANDS_TEXT, parse_mode="HTML", reply_markup=back_menu())
+
+
+# ---------- Оплата ----------
+@router.callback_query(F.data == "buy")
+async def buy_menu(cb: CallbackQuery):
+    await cb.message.edit_text(TARIFFS_TEXT, reply_markup=tariffs_menu(), parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("tariff_"))
+async def choose_tariff(cb: CallbackQuery):
+    t = cb.data.split("_")[1]
+    days, rub, stars = TARIFFS[t]
+    text = (
+        f"💎 <b>Тариф</b>\n\n"
+        f"Срок: <b>{days} дней</b>\n"
+        f"Цена: <b>{rub}₽</b> или <b>{stars}⭐</b>\n\n"
+        "Выбери способ оплаты:"
+    )
+    await cb.message.edit_text(text, reply_markup=pay_method_menu(t), parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("stars_"))
+async def pay_stars(cb: CallbackQuery, bot: Bot):
+    t = cb.data.split("_")[1]
+    days, rub, stars = TARIFFS[t]
+    await bot.send_invoice(
+        chat_id=cb.from_user.id,
+        title=f"Подписка на {days} дней",
+        description=f"Тариф {days} дней",
+        payload=f"sub_{t}_{cb.from_user.id}",
+        provider_token="",
+        currency="XTR",
+        prices=[LabeledPrice(label="Подписка", amount=stars)],
+    )
+    await cb.answer()
+
+
+@router.pre_checkout_query()
+async def pre_checkout(q: PreCheckoutQuery):
+    await q.answer(ok=True)
+
+
+@router.message(F.successful_payment)
+async def on_paid(msg: Message):
+    payload = msg.successful_payment.invoice_payload
+    t = payload.split("_")[1]
+    await extend_subscription(msg.from_user.id, TARIFFS[t][0])
+    await msg.answer("✅ Оплата прошла! Подписка активирована 💎")
+
+
+@router.callback_query(F.data.startswith("card_"))
+async def pay_card(cb: CallbackQuery):
+    t = cb.data.split("_")[1]
+    days, rub, stars = TARIFFS[t]
+    pid = await add_payment(cb.from_user.id, t, "card", rub)
+    text = (
+        "💳 <b>Оплата картой</b>\n\n"
+        f"Сумма: <b>{rub}₽</b>\n"
+        f"Срок: <b>{days} дней</b>\n\n"
+        "Нажми «Я оплатил», чтобы получить реквизиты."
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"paid_{pid}")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="buy")],
     ])
-    await call.message.answer(f"💳 {p['label']} — {p['rub']}₽\nКарта: {CARD_NUMBER}\n\nНажми «Я оплатил» и пришли скриншот.", reply_markup=kb)
+    await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
 
-@dp.callback_query_handler(text_startswith="paid_")
-async def cb_paid(call):
-    plan = call.data.split("_")[1]
-    pending_payments[call.from_user.id] = {"plan": plan}
-    await call.message.answer("📸 Пришли скриншот.")
 
-@dp.message_handler(content_types=['photo'])
-async def on_screenshot(message):
-    uid = message.from_user.id
-    if uid not in pending_payments:
-        return
-    plan = pending_payments[uid].get("plan", "1month")
-    user = message.from_user
-    owner_kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="✅ Да", callback_data=f"approve_{user.id}_{plan}")],
-        [types.InlineKeyboardButton(text="❌ Нет", callback_data=f"reject_{user.id}")],
-    ])
-    try:
-        await bot.send_photo(OWNER_ID, message.photo[-1].file_id, caption=f"💰 Оплата от @{user.username}\nПлан: {PRICES[plan]['label']}", reply_markup=owner_kb)
-        await message.answer("✅ Отправлено! Жди подтверждения.")
-        pending_payments.pop(uid, None)
-    except:
-        await message.answer("⚠️ Ошибка.")
-
-@dp.callback_query_handler(text_startswith="approve_")
-async def cb_approve(call):
-    if call.from_user.id != OWNER_ID:
-        await call.answer("Только владелец!")
-        return
-    parts = call.data.split("_")
-    uid = int(parts[1])
-    plan = parts[2]
-    days = PRICES[plan]["days"]
-    now = datetime.now()
-    current = subscriptions.get(uid)
-    new_until = (current + timedelta(days=days)) if (current and current > now) else (now + timedelta(days=days))
-    subscriptions[uid] = new_until
-    try:
-        await bot.send_message(uid, f"✅ Оплата подтверждена до {new_until.strftime('%d.%m.%Y %H:%M')}")
-    except:
-        pass
-    await call.message.edit_reply_markup(reply_markup=None)
-    await call.answer("OK")
-
-@dp.callback_query_handler(text_startswith="reject_")
-async def cb_reject(call):
-    if call.from_user.id != OWNER_ID:
-        await call.answer("Только владелец!")
-        return
-    uid = int(call.data.split("_")[1])
-    try:
-        await bot.send_message(uid, "❌ Оплата отклонена.")
-    except:
-        pass
-    await call.message.edit_reply_markup(reply_markup=None)
-
-@dp.callback_query_handler(text="ref")
-async def cb_ref(call):
-    uname = bot.username or "my_bot"
-    await call.message.answer(f"👥 Ссылка:\nhttps://t.me/{uname}?start=ref_{call.from_user.id}", reply_markup=back_kb())
-
-@dp.callback_query_handler(text="howto")
-async def cb_howto(call):
-    await call.message.answer("📚 Настройки → Аккаунт → Автоматизация чатов", reply_markup=back_kb())
-
-@dp.message_handler(lambda m: m.text and m.text.startswith("."))
-async def b_commands(message):
-    logging.info(f"CMD: '{message.text}' | from={message.from_user.id} | chat_type={message.chat.type} | bcid={message.business_connection_id} | chat_id={message.chat.id}")
-    if message.chat.type == "private":
-        return
-    t = message.chat.id
-    reply = message.reply_to_message
-    owner_id = await get_owner_id(message.business_connection_id)
-    if not await is_owner(message):
-        logging.info(f"REJECTED: owner_id={owner_id} | from={message.from_user.id} | OWNER_ID={OWNER_ID}")
-        return
-    if not await check_business_subscription(message):
-        return
-    parts = message.text.split()
-    cmd = parts[0].lower()
-
-    if cmd == ".mute" and reply:
-        m = int(parts[1]) if len(parts) > 1 else 10
-        mutes[t] = datetime.now() + timedelta(minutes=m)
-        get_stats(t)["mutes"] += 1
-        await try_delete(message)
-        await message.answer(f"🔇 Мут {m} мин")
-    elif cmd == ".unmute":
-        mutes.pop(t, None)
-        await try_delete(message)
-        await message.answer("🔊 Мут снят")
-    elif cmd == ".warn":
-        n = int(parts[1]) if len(parts) > 1 else 1
-        warns[t] = min(warns.get(t, 0) + n, WARN_LIMIT)
-        get_stats(t)["warns"] += n
-        await try_delete(message)
-        await message.answer(f"⚠️ Предупреждений: {warns[t]}/{WARN_LIMIT}")
-        if warns[t] >= WARN_LIMIT:
-            mutes[t] = datetime.now() + timedelta(minutes=WARN_MUTE_MINUTES)
-    elif cmd == ".unwarn":
-        warns.pop(t, None)
-        mutes.pop(t, None)
-        await try_delete(message)
-        await message.answer("✅ Сброшено")
-    elif cmd == ".del" and reply:
-        await try_delete(reply)
-        await try_delete(message)
-    elif cmd == ".kick" and reply:
-        await try_delete(reply)
-        await try_delete(message)
-    elif cmd == ".clear":
-        n = int(parts[1]) if len(parts) > 1 else 5
-        if t in message_cache:
-            ids = sorted(message_cache[t].keys())[-n:]
-            for mid in ids:
-                try:
-                    await bot.delete_message(t, mid)
-                except:
-                    pass
-        await try_delete(message)
-    elif cmd == ".spam":
-        p = message.text.split(maxsplit=2)
-        if len(p) < 3:
-            return
+@router.callback_query(F.data.startswith("paid_"))
+async def paid_click(cb: CallbackQuery, bot: Bot):
+    pid = int(cb.data.split("_")[1])
+    await cb.message.edit_text(
+        "💳 Переведи сумму на карту:\n\n"
+        f"<code>{CARD_NUMBER}</code>\n\n"
+        f"После перевода пришли скриншот админу @{SUPPORT_USERNAME}.\n"
+        f"Заявка №<b>{pid}</b> — после подтверждения подписка активируется.",
+        parse_mode="HTML",
+        reply_markup=back_menu(),
+    )
+    for admin in ADMIN_IDS:
         try:
-            n = min(int(p[1]), 50)
-        except:
-            n = 1
-        await try_delete(message)
+            await bot.send_message(
+                admin,
+                f"💰 Заявка №{pid}\n"
+                f"Юзер: {cb.from_user.full_name} (@{cb.from_user.username})\n"
+                f"ID: <code>{cb.from_user.id}</code>\n\n"
+                f"Подтвердить: <code>/confirm {pid}</code>",
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            log.warning(f"admin notify failed: {e}")
+    await cb.answer("Заявка отправлена ✅")
+
+
+@router.message(F.text.startswith("/confirm"))
+async def admin_confirm(msg: Message, bot: Bot):
+    if msg.from_user.id not in ADMIN_IDS:
+        return
+    try:
+        pid = int(msg.text.split()[1])
+    except (IndexError, ValueError):
+        await msg.answer("Использование: /confirm <id>")
+        return
+    p = await confirm_payment(pid)
+    if not p:
+        await msg.answer("Заявка не найдена")
+        return
+    await msg.answer(f"✅ Заявка {pid} подтверждена.")
+    try:
+        await bot.send_message(p["user_id"], "✅ Подписка активирована! 🎉")
+    except Exception:
+        pass
+
+
+# ---------- Рефералка ----------
+@router.callback_query(F.data == "ref")
+async def ref_menu(cb: CallbackQuery, bot: Bot):
+    me = await bot.me()
+    link = f"https://t.me/{me.username}?start=ref_{cb.from_user.id}"
+    u = await get_user(cb.from_user.id)
+    refs = u["ref_count"] or 0
+    text = (
+        "👥 <b>Реферальная система</b>\n\n"
+        f"Приглашай друзей и получай <b>+{REFERRAL_REWARD_DAYS} дней</b> "
+        f"за каждые {REFERRAL_TARGET} человек!\n\n"
+        f"Твоя ссылка:\n<code>{link}</code>\n\n"
+        f"👤 Приглашено: <b>{refs}</b> / {REFERRAL_TARGET}"
+    )
+    await cb.message.edit_text(text, reply_markup=back_menu(), parse_mode="HTML")
+
+
+# ---------- Dot-команды ----------
+@router.message(F.text.startswith("."))
+async def dot_commands(msg: Message):
+    if not await has_access(msg.from_user.id):
+        await msg.answer("❌ Подписка неактивна. Купи подписку в меню.")
+        return
+
+    text = msg.text.strip()
+
+    if text == ".help":
+        await msg.answer(COMMANDS_TEXT, parse_mode="HTML")
+        return
+
+    m = re.match(r"\.spam\s+(\d+)\s+(.+)", text, re.DOTALL)
+    if m:
+        n = min(int(m.group(1)), 50)
+        body = m.group(2)
         for _ in range(n):
-            try:
-                await message.answer(p[2])
-                await asyncio.sleep(0.2)
-            except:
-                await asyncio.sleep(0.4)
-    elif cmd == ".st":
-        text = message.text[3:].strip()
-        if not text:
-            return
-        await try_delete(message)
-        for word in text.split():
-            try:
-                await message.answer(word)
-                await asyncio.sleep(0.2)
-            except:
-                await asyncio.sleep(0.4)
-    elif cmd == ".echo":
-        text = message.text[5:].strip()
-        if text:
-            await message.answer(text)
-        await try_delete(message)
-    elif cmd == ".say":
-        text = message.text[4:].strip()
-        if text:
-            await message.answer(text)
-        await try_delete(message)
-    elif cmd == ".roll":
-        n = int(parts[1]) if len(parts) > 1 else 100
-        await try_delete(message)
-        await message.answer(f"🎲 {random.randint(1, n)}")
-    elif cmd == ".flip":
-        await try_delete(message)
-        await message.answer(random.choice(["🦅 Орёл", "🪙 Решка"]))
-    elif cmd == ".calc":
-        expr = message.text[5:].strip()
-        try:
-            res = eval(expr, {"__builtins__": None}, {})
-        except:
-            res = "ошибка"
-        await try_delete(message)
-        await message.answer(f"🧮 {expr} = {res}")
-    elif cmd == ".clone":
-        state = parts[1].lower() if len(parts) > 1 else "on"
-        clone[t] = (state == "on")
-        await try_delete(message)
-        await message.answer(f"🔄 Автоповтор {'вкл' if state == 'on' else 'выкл'}")
-    elif cmd == ".silent":
-        state = parts[1].lower() if len(parts) > 1 else "on"
-        silent_mode[t] = (state == "on")
-        await try_delete(message)
-        if state == "off":
-            await message.answer("🔊 Тихий режим выкл")
-    elif cmd == ".stats":
-        s = get_stats(t)
-        await try_delete(message)
-        await message.answer(f"📊 Варнов: {warns.get(t, 0)}/{WARN_LIMIT}\nМут: {'да' if t in mutes else 'нет'}\nУдалено: {s['deleted']}")
-    elif cmd == ".info":
-        await try_delete(message)
-        await message.answer(f"🆔 {t}\nВладелец: {owner_id}\nВ кэше: {len(message_cache.get(t, {}))}")
-    elif cmd == ".history":
-        n = int(parts[1]) if len(parts) > 1 else 10
-        await try_delete(message)
-        if t not in message_cache or not message_cache[t]:
-            await message.answer("📭 История пуста")
-            return
-        items = sorted(message_cache[t].items(), key=lambda x: x[1]["time"])[-n:]
-        text = f"📜 Последние {len(items)}:\n\n"
-        for mid, d in items:
-            who = "Ты" if d["sender"] == owner_id else "Собеседник"
-            text += f"{who} ({d['time']}): {d['text'][:150]}\n"
-        await message.answer(text[:4000])
-
-@dp.message_handler(content_types=types.ContentTypes.TEXT)
-async def on_biz_message(message):
-    if message.chat.type == "private":
-        return
-    t = message.chat.id
-    owner_id = await get_owner_id(message.business_connection_id)
-    msg_from = message.from_user.id if message.from_user else 0
-
-    if message.text and message.text.startswith(".") and msg_from != owner_id:
-        return
-    if silent_mode.get(t) and msg_from == owner_id:
+            await msg.answer(body)
+            await asyncio.sleep(0.4)
         return
 
-    if t not in message_cache:
-        message_cache[t] = {}
-    message_cache[t][message.message_id] = {
-        "text": message.text or "[медиа]",
-        "time": message.date.strftime("%Y-%m-%d %H:%M:%S"),
-        "sender": msg_from
-    }
-    if len(message_cache[t]) > 200:
-        oldest = sorted(message_cache[t].keys())[0]
-        message_cache[t].pop(oldest, None)
-
-    if t in mutes and mutes[t] > datetime.now():
-        if msg_from != owner_id:
-            try:
-                await message.delete()
-                get_stats(t)["deleted"] += 1
-            except:
-                pass
-            return
-
-    if t in mutes and mutes[t] <= datetime.now():
-        mutes.pop(t, None)
-        warns.pop(t, None)
-
-    if clone.get(t) and message.text and msg_from != owner_id:
-        await message.answer(message.text)
-
-@dp.edited_message_handler()
-async def on_edit(message):
-    if message.chat.type == "private":
+    m = re.match(r"\.st\s+(.+)", text, re.DOTALL)
+    if m:
+        for w in m.group(1).split():
+            await msg.answer(w)
+            await asyncio.sleep(0.3)
         return
-    owner_id = await get_owner_id(message.business_connection_id)
-    msg_from = message.from_user.id if message.from_user else 0
-    if msg_from == owner_id:
+
+    if text in (".warn", ".mute", ".unwarn", ".unmute") or text.startswith(".clone"):
+        await msg.answer("⚠️ Эта команда требует userbot (Telethon). Пока недоступна.")
         return
-    try:
-        await bot.send_message(owner_id, f"✏️ Изменилось:\n{message.text[:300]}")
-    except:
-        pass
+
+    await msg.answer("❓ Неизвестная команда. Напиши .help")
+
+
+# ============================================================
+# ЗАПУСК
+# ============================================================
+async def main():
+    await init_db()
+    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    dp = Dispatcher()
+    dp.include_router(router)
+
+    await bot.delete_webhook(drop_pending_updates=True)
+    log.info("Bot started (polling)")
+    await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
-    threading.Thread(target=run_flask, daemon=True).start()
-    logging.info("Starting bot...")
-    executor.start_polling(dp, skip_updates=True)
+    asyncio.run(main())
