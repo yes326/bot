@@ -557,5 +557,5 @@ def main():
 
 
 if __name__ == "__main__":
-    asyncio.get_event_loop().run_until_complete(init_db())
-    main()
+    asyncio.run(init_db())   # запускает init_db в отдельном loop, безопасно
+    main()                    # дальше web.run_app создаёт свой loop
