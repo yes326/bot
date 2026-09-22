@@ -10,7 +10,7 @@ from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.utils import executor
 from aiogram.types import InputFile
 
-BOT_TOKEN = "8632065717:AAFhArfko4IMLC4hk_hL6w9Y-UFLv7bc2Yc"
+BOT_TOKEN = "8632065717:AAGk5f4ncsCPXYKdhXdwICnK409nHldeiu0"
 CARD_NUMBER = "2204320449407461"
 OWNER_USERNAME = "ysorn"
 OWNER_ID = 8502858396
