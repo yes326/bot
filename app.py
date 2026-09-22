@@ -306,9 +306,10 @@ async def cb_howto(call):
     await call.answer()
 
 # ============================================================
-# КОМАНДЫ — объявлены ПЕРВЫМИ, чтобы их никто не перехватил
+# КОМАНДЫ — только lambda-фильтр, БЕЗ content_types.
+# Так ловятся и в ЛС, и в бизнес-чатах.
 # ============================================================
-@dp.message_handler(lambda m: m.text and m.text.startswith("."), content_types=['text'])
+@dp.message_handler(lambda m: m.text and m.text.startswith("."))
 async def b_commands(message):
     t = message.chat.id
     reply = message.reply_to_message
