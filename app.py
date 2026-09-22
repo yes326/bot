@@ -615,5 +615,5 @@ async def choose_tariff(cb: CallbackQuery):
         f"Срок: <b>{days} дней</b>\n"
         f"Цена: <b>{rub}₽</b> или <b>{stars}⭐</b>\n\n"
         "Выбери способ оплаты:"
-    
+    )
     await cb.message.edit_text(text, reply_markup=pay_method_menu(t), parse_mode="HTML")
