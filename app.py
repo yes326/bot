@@ -42,6 +42,7 @@ warns = {}
 mutes = {}
 clone = {}
 warn_messages = {}
+referrals = {}
 
 # ================== FLASK ==================
 flask_app = Flask(__name__)
@@ -147,6 +148,29 @@ def plans_kb(user_id=None):
 @dp.message(F.text == "/start")
 async def start_cmd(message: types.Message):
     user_id = message.from_user.id
+
+    # Обработка реферальной ссылки
+    args = message.text.split()
+    if len(args) > 1 and args[1].startswith("ref_"):
+        try:
+            referrer_id = int(args[1][4:])
+            if referrer_id != user_id:
+                referrals.setdefault(referrer_id, set()).add(user_id)
+                # +3 дня рефереру
+                now = datetime.now()
+                current = subscriptions.get(referrer_id, now)
+                subscriptions[referrer_id] = max(current, now) + timedelta(days=3)
+                try:
+                    await bot.send_message(
+                        referrer_id,
+                        "🎁 *Новый друг присоединился!*\n+3 дня к подписке.",
+                        parse_mode="Markdown"
+                    )
+                except:
+                    pass
+        except ValueError:
+            pass
+
     if not await check_subscription(user_id):
         await message.answer(
             "⚠️ *Для использования бота нужно подписаться на наш канал.*\n\n"
@@ -264,6 +288,42 @@ async def cb_trial(call: types.CallbackQuery):
     await call.answer("Пробный период активирован ✅")
 
 
+@dp.callback_query(F.data == "ref")
+async def cb_ref(call: types.CallbackQuery):
+    me = await bot.get_me()
+    link = f"https://t.me/{me.username}?start=ref_{call.from_user.id}"
+    invited = len(referrals.get(call.from_user.id, set()))
+    await call.message.answer(
+        f"👥 *Пригласить друга*\n\n"
+        f"Отправь другу свою ссылку:\n"
+        f"`{link}`\n\n"
+        f"🎁 За каждого друга — *+3 дня* к подписке!\n"
+        f"📊 Приглашено: *{invited}*",
+        parse_mode="Markdown",
+        reply_markup=back_kb()
+    )
+    await call.answer()
+
+
+@dp.callback_query(F.data == "howto")
+async def cb_howto(call: types.CallbackQuery):
+    await call.message.answer(
+        "📚 *Как подключить бота:*\n\n"
+        "1️⃣ Открой *Настройки* Telegram\n"
+        "2️⃣ Перейди в *Аккаунт* → *Автоматизация чатов*\n"
+        "3️⃣ Выбери *AntiSpam Defender*\n"
+        "4️⃣ Дай разрешения:\n"
+        "   • ✅ Чтение сообщений\n"
+        "   • ✅ Ответы на сообщения\n"
+        "   • ✅ Удаление входящих\n"
+        "   • ✅ Удаление исходящих\n\n"
+        "5️⃣ Готово! Бот начнёт управлять чатами.",
+        parse_mode="Markdown",
+        reply_markup=back_kb()
+    )
+    await call.answer()
+
+
 @dp.callback_query(F.data.startswith("pay_"))
 async def cb_pay(call: types.CallbackQuery):
     plan = call.data.split("_")[1]
@@ -315,6 +375,52 @@ async def on_screenshot(message: types.Message):
     except Exception as e:
         logging.error(f"Ошибка пересылки: {e}")
         await message.answer("⚠️ Ошибка. Свяжитесь с @ysorn.")
+
+
+@dp.callback_query(F.data.startswith("approve_"))
+async def cb_approve(call: types.CallbackQuery):
+    if call.from_user.id != OWNER_ID:
+        await call.answer("❌ Нет доступа", show_alert=True)
+        return
+    parts = call.data.split("_")
+    user_id = int(parts[1])
+    plan = parts[2]
+    now = datetime.now()
+    days = PRICES[plan]["days"]
+    current = subscriptions.get(user_id, now)
+    subscriptions[user_id] = max(current, now) + timedelta(days=days)
+    try:
+        await bot.send_message(
+            user_id,
+            f"✅ *Оплата подтверждена!*\n\n"
+            f"💎 Подписка активирована на *{days} дней*.\n"
+            f"📅 До: *{subscriptions[user_id].strftime('%d.%m.%Y')}*",
+            parse_mode="Markdown"
+        )
+    except:
+        pass
+    await call.message.edit_caption(
+        caption=f"{call.message.caption}\n\n✅ *Подтверждено*",
+        parse_mode="Markdown"
+    )
+    await call.answer("Подписка активирована")
+
+
+@dp.callback_query(F.data.startswith("reject_"))
+async def cb_reject(call: types.CallbackQuery):
+    if call.from_user.id != OWNER_ID:
+        await call.answer("❌ Нет доступа", show_alert=True)
+        return
+    user_id = int(call.data.split("_")[1])
+    try:
+        await bot.send_message(user_id, "❌ Оплата отклонена. Свяжитесь с @ysorn.")
+    except:
+        pass
+    await call.message.edit_caption(
+        caption=f"{call.message.caption}\n\n❌ *Отклонено*",
+        parse_mode="Markdown"
+    )
+    await call.answer("Отклонено")
 
 
 # ================== ПЕРЕСЫЛКА ЛС ВЛАДЕЛЬЦУ ==================
@@ -631,6 +737,7 @@ async def main():
     me = await bot.get_me()
     bot.username = me.username
     print(f"✅ Bot started: @{me.username}")
+    await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot, drop_pending_updates=True)
 
 
