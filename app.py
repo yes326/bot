@@ -65,22 +65,42 @@ dp = Dispatcher(storage=MemoryStorage())
 
 
 # ================== УТИЛИТЫ ==================
+async def bot_api(method: str, data: dict):
+    """Прямой вызов любого метода Bot API (для aiogram 3.15, где нет deleteBusinessMessages)."""
+    try:
+        result = await bot.session.make_request(method=method, data=data)
+        return result
+    except Exception as e:
+        logging.error(f"❌ bot_api({method}): {type(e).__name__}: {e}")
+        return None
+
+
+async def delete_business_msg(conn_id, message_ids):
+    """Удаляет бизнес-сообщения через прямой вызов Bot API."""
+    if not isinstance(message_ids, list):
+        message_ids = [message_ids]
+    return await bot_api(
+        "deleteBusinessMessages",
+        {
+            "business_connection_id": conn_id,
+            "message_ids": message_ids,
+        },
+    )
+
+
 async def auto_delete(chat_id, message_id, conn_id, seconds=3):
     await asyncio.sleep(seconds)
     try:
-        await bot.delete_business_messages(
-            business_connection_id=conn_id,
-            message_ids=[message_id],
-        )
+        await delete_business_msg(conn_id, [message_id])
     except Exception as e:
         logging.error(f"auto_delete failed: {e}")
 
 
 async def delete_cmd(message: types.Message):
     try:
-        await bot.delete_business_messages(
-            business_connection_id=message.business_connection_id,
-            message_ids=[message.message_id],
+        await delete_business_msg(
+            message.business_connection_id,
+            [message.message_id],
         )
         logging.info(f"✅ Удалена команда: {(message.text or '')[:30]}")
     except Exception as e:
@@ -89,11 +109,8 @@ async def delete_cmd(message: types.Message):
 
 async def delete_silent(chat_id, message_id, conn_id):
     try:
-        await bot.delete_business_messages(
-            business_connection_id=conn_id,
-            message_ids=[message_id],
-        )
-        return True
+        result = await delete_business_msg(conn_id, [message_id])
+        return result is not None
     except Exception as e:
         logging.error(f"❌ delete_silent: {type(e).__name__}: {e}")
         return False
@@ -496,7 +513,7 @@ async def forward_to_owner(message: types.Message):
 # ================== BUSINESS КОМАНДЫ ==================
 @dp.business_message(F.text.startswith(".mute"))
 async def b_mute(message: types.Message):
-    logging.info(f"🔵 B_MUTE: chat={message.chat.id} text={message.text}")
+    logging.info(f"🔵 B_MUTE: chat={message.chat.id}")
     if not await is_owner(message):
         return
     if not await check_business_subscription(message):
@@ -506,11 +523,7 @@ async def b_mute(message: types.Message):
     m = int(parts[1]) if len(parts) > 1 else 10
     mutes[message.chat.id] = datetime.now() + timedelta(minutes=m)
     logging.info(f"🔇 Мут установлен: chat={message.chat.id} до {mutes[message.chat.id]}")
-    await send_confirm(
-        message.chat.id,
-        f"🔇 <b>Мут на {m} мин</b>",
-        message.business_connection_id,
-    )
+    await send_confirm(message.chat.id, f"🔇 <b>Мут на {m} мин</b>", message.business_connection_id)
 
 
 @dp.business_message(F.text.startswith(".unmute"))
@@ -686,12 +699,11 @@ async def b_history(message: types.Message):
         pass
 
 
-# ================== ГЛАВНЫЙ ОБРАБОТЧИК ВСЕХ BUSINESS СООБЩЕНИЙ ==================
+# ================== ГЛАВНЫЙ ОБРАБОТЧИК ==================
 @dp.business_message()
 async def b_default(message: types.Message):
-    # ЛОГИРУЕМ ВСЁ
     try:
-        print(f"🔵 B_DEFAULT СРАБОТАЛ: chat={message.chat.id} from={message.from_user.id if message.from_user else '?'} text={(message.text or '')[:40]!r}")
+        print(f"🔵 B_DEFAULT: chat={message.chat.id} from={message.from_user.id if message.from_user else '?'} text={(message.text or '')[:40]!r}")
         logging.info(f"🔵 B_DEFAULT: chat={message.chat.id} from={message.from_user.id if message.from_user else '?'} text={(message.text or '')[:40]!r}")
     except Exception as e:
         logging.error(f"log error: {e}")
@@ -712,7 +724,7 @@ async def b_default(message: types.Message):
         oldest = sorted(message_cache[t].keys())[0]
         message_cache[t].pop(oldest, None)
 
-    # ПРОВЕРКА МУТА
+    # МУТ
     if t in mutes:
         if mutes[t] > datetime.now():
             if msg_from != owner_id:
