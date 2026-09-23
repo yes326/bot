@@ -1,3 +1,8 @@
+# -*- coding: utf-8 -*-
+"""
+AntiSpam Defender Bot — Business-бот с командами в чате с людьми.
+"""
+
 import os
 import logging
 import threading
@@ -6,10 +11,9 @@ from datetime import datetime, timedelta
 from flask import Flask
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.methods import DeleteBusinessMessages, EditMessageText
 
 # ================== НАСТРОЙКИ ==================
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8881768476:AAE2q3ljdizD91qq9LuU0OPfXfQRIwQ2Beg")
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CARD_NUMBER = "2204320449407461"
 OWNER_USERNAME = "ysorn"
 OWNER_ID = 8502858396
@@ -23,37 +27,41 @@ PRICES = {
     "1year": {"rub": 1199, "days": 365, "label": "1 год"},
 }
 TRIAL_DAYS = 7
-WARN_LIMIT = WARN_MUTE_MINUTES = 5
+WARN_LIMIT = 5
+WARN_MUTE_MINUTES = 5
 
 BANNER_PATH = os.path.join(os.path.dirname(__file__), "IMG_20260918_155302_695.jpg")
 
-# Хранилища
+# Хранилища (в памяти — стираются при рестарте)
 business_owners = {}
 subscriptions = {}
 pending_payments = {}
 used_trials = set()
 message_cache = {}
+warns = {}
+mutes = {}
+clone = {}
+warn_messages = {}
 
 # ================== FLASK ==================
 flask_app = Flask(__name__)
+
 
 @flask_app.route('/')
 def home():
     return "Bot is running"
 
+
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     flask_app.run(host='0.0.0.0', port=port)
+
 
 # ================== ИНИЦИАЛИЗАЦИЯ ==================
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-warns = {}
-mutes = {}
-clone = {}
-warn_messages = {}
 
 # ================== ПРОВЕРКА ПОДПИСКИ ==================
 async def check_subscription(user_id):
@@ -64,11 +72,13 @@ async def check_subscription(user_id):
         logging.error(f"Ошибка проверки подписки: {e}")
         return True
 
+
 def subscribe_kb():
     return types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="📢 Подписаться на канал", url=CHANNEL_LINK)],
         [types.InlineKeyboardButton(text="✅ Я подписался", callback_data="check_sub")],
     ])
+
 
 # ================== ВЛАДЕЛЕЦ ==================
 async def get_owner_id(business_connection_id):
@@ -81,12 +91,15 @@ async def get_owner_id(business_connection_id):
         owner_id = conn.user.id
         business_owners[business_connection_id] = owner_id
         return owner_id
-    except:
+    except Exception as e:
+        logging.error(f"get_owner_id error: {e}")
         return None
+
 
 async def is_owner(message: types.Message):
     owner_id = await get_owner_id(message.business_connection_id)
     return owner_id is not None and message.from_user.id == owner_id
+
 
 async def check_business_subscription(message: types.Message):
     owner_id = await get_owner_id(message.business_connection_id)
@@ -103,6 +116,7 @@ async def check_business_subscription(message: types.Message):
         return False
     return True
 
+
 # ================== КЛАВИАТУРЫ ==================
 def main_menu():
     return types.InlineKeyboardMarkup(inline_keyboard=[
@@ -112,10 +126,12 @@ def main_menu():
         [types.InlineKeyboardButton(text="📚 Как подключить", callback_data="howto")],
     ])
 
+
 def back_kb():
     return types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="🔙 В меню", callback_data="back_main")]
     ])
+
 
 def plans_kb(user_id=None):
     rows = []
@@ -125,6 +141,8 @@ def plans_kb(user_id=None):
         rows.append([types.InlineKeyboardButton(text=f"{v['label']} — {v['rub']}₽", callback_data=f"pay_{k}")])
     rows.append([types.InlineKeyboardButton(text="🔙 Назад", callback_data="back_main")])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 # ================== /START ==================
 @dp.message(F.text == "/start")
 async def start_cmd(message: types.Message):
@@ -148,6 +166,7 @@ async def start_cmd(message: types.Message):
         logging.error(f"Баннер: {e}")
         await message.answer("🏠 *Главное меню*\n\nВыбери 👇", parse_mode="Markdown", reply_markup=main_menu())
 
+
 @dp.callback_query(F.data == "check_sub")
 async def cb_check_sub(call: types.CallbackQuery):
     if await check_subscription(call.from_user.id):
@@ -167,6 +186,7 @@ async def cb_check_sub(call: types.CallbackQuery):
     else:
         await call.answer("❌ Ты ещё не подписался на канал!", show_alert=True)
 
+
 @dp.callback_query(F.data == "back_main")
 async def cb_back(call: types.CallbackQuery):
     try:
@@ -183,6 +203,7 @@ async def cb_back(call: types.CallbackQuery):
     except:
         await call.message.answer("🏠 *Главное меню*\n\nВыбери 👇", parse_mode="Markdown", reply_markup=main_menu())
 
+
 @dp.callback_query(F.data == "cmd_list")
 async def cb_cmds(call: types.CallbackQuery):
     await call.message.answer(
@@ -196,6 +217,7 @@ async def cb_cmds(call: types.CallbackQuery):
         "`.clone on/off` — автоповтор\n"
         "`.history N` — последние N сообщений",
         parse_mode="Markdown", reply_markup=back_kb())
+
 
 @dp.callback_query(F.data == "sub_menu")
 async def cb_sub(call: types.CallbackQuery):
@@ -217,6 +239,7 @@ async def cb_sub(call: types.CallbackQuery):
         parse_mode="Markdown",
         reply_markup=plans_kb(user_id)
     )
+
 
 @dp.callback_query(F.data == "trial")
 async def cb_trial(call: types.CallbackQuery):
@@ -240,6 +263,7 @@ async def cb_trial(call: types.CallbackQuery):
     )
     await call.answer("Пробный период активирован ✅")
 
+
 @dp.callback_query(F.data.startswith("pay_"))
 async def cb_pay(call: types.CallbackQuery):
     plan = call.data.split("_")[1]
@@ -255,11 +279,13 @@ async def cb_pay(call: types.CallbackQuery):
         f"📸 После перевода нажми «Я оплатил» и пришли скриншот.",
         parse_mode="Markdown", reply_markup=kb)
 
+
 @dp.callback_query(F.data.startswith("paid_"))
 async def cb_paid(call: types.CallbackQuery):
     plan = call.data.split("_")[1]
     pending_payments[call.from_user.id] = {"plan": plan}
     await call.message.answer("📸 Пришли скриншот оплаты одним сообщением-фото.")
+
 
 @dp.message(F.photo)
 async def on_screenshot(message: types.Message):
@@ -290,17 +316,16 @@ async def on_screenshot(message: types.Message):
         logging.error(f"Ошибка пересылки: {e}")
         await message.answer("⚠️ Ошибка. Свяжитесь с @ysorn.")
 
-# ================== ПЕРЕСЫЛКА ВСЕХ ЛС ВЛАДЕЛЬЦУ ==================
+
+# ================== ПЕРЕСЫЛКА ЛС ВЛАДЕЛЬЦУ ==================
 @dp.message()
 async def forward_to_owner(message: types.Message):
-    """Пересылает все сообщения в ЛС бота — владельцу."""
     if message.chat.type != "private":
         return
     if message.from_user.id == OWNER_ID:
         return
     if message.text and message.text.startswith("/"):
         return
-
     try:
         text = message.text or "[медиа]"
         user = message.from_user
@@ -313,6 +338,8 @@ async def forward_to_owner(message: types.Message):
         )
     except Exception as e:
         logging.error(f"Не смог переслать ЛС: {e}")
+
+
 # ================== BUSINESS КОМАНДЫ ==================
 @dp.business_message(F.text.startswith(".mute"))
 async def b_mute(message: types.Message):
@@ -324,13 +351,21 @@ async def b_mute(message: types.Message):
     m = int(parts[1]) if len(parts) > 1 else 10
     mutes[message.chat.id] = datetime.now() + timedelta(minutes=m)
     try:
-        await bot(DeleteBusinessMessages(
+        await bot.delete_business_messages(
             business_connection_id=message.business_connection_id,
             message_ids=[message.message_id],
-        ))
+        )
+    except Exception as e:
+        logging.error(f"del mute cmd: {e}")
+    try:
+        await bot.send_message(
+            message.chat.id,
+            f"🔇 Мут на {m} мин",
+            business_connection_id=message.business_connection_id,
+        )
     except:
         pass
-    await message.answer(f"🔇 Мут {m} мин")
+
 
 @dp.business_message(F.text.startswith(".unmute"))
 async def b_unmute(message: types.Message):
@@ -340,13 +375,13 @@ async def b_unmute(message: types.Message):
         return
     mutes.pop(message.chat.id, None)
     try:
-        await bot(DeleteBusinessMessages(
+        await bot.delete_business_messages(
             business_connection_id=message.business_connection_id,
             message_ids=[message.message_id],
-        ))
-    except:
-        pass
-    await message.answer("🔊 Мут снят")
+        )
+    except Exception as e:
+        logging.error(f"del unmute: {e}")
+
 
 @dp.business_message(F.text.startswith(".warn"))
 async def b_warn(message: types.Message):
@@ -360,22 +395,22 @@ async def b_warn(message: types.Message):
     warns[t] = min(warns.get(t, 0) + n, WARN_LIMIT)
     text = f"⚠️ *Предупреждений: {warns[t]}/{WARN_LIMIT}*"
     try:
-        await bot(DeleteBusinessMessages(
+        await bot.delete_business_messages(
             business_connection_id=message.business_connection_id,
             message_ids=[message.message_id],
-        ))
-    except:
-        pass
+        )
+    except Exception as e:
+        logging.error(f"del warn cmd: {e}")
     msg_id = warn_messages.get(t)
     if msg_id:
         try:
-            await bot(EditMessageText(
+            await bot.edit_message_text(
                 business_connection_id=message.business_connection_id,
                 chat_id=message.chat.id,
                 message_id=msg_id,
                 text=text,
                 parse_mode="Markdown",
-            ))
+            )
         except Exception as e:
             logging.error(f"warn edit error: {e}")
             new_msg = await message.answer(text, parse_mode="Markdown")
@@ -386,15 +421,16 @@ async def b_warn(message: types.Message):
     if warns[t] >= WARN_LIMIT:
         mutes[t] = datetime.now() + timedelta(minutes=WARN_MUTE_MINUTES)
         try:
-            await bot(EditMessageText(
+            await bot.edit_message_text(
                 business_connection_id=message.business_connection_id,
                 chat_id=message.chat.id,
                 message_id=warn_messages[t],
                 text=f"⚠️ *Предупреждений: {WARN_LIMIT}/{WARN_LIMIT}*\n🔇 *Мут на {WARN_MUTE_MINUTES} минут!*",
                 parse_mode="Markdown",
-            ))
+            )
         except:
             pass
+
 
 @dp.business_message(F.text.startswith(".unwarn"))
 async def b_unwarn(message: types.Message):
@@ -406,26 +442,27 @@ async def b_unwarn(message: types.Message):
     warns.pop(t, None)
     mutes.pop(t, None)
     try:
-        await bot(DeleteBusinessMessages(
+        await bot.delete_business_messages(
             business_connection_id=message.business_connection_id,
             message_ids=[message.message_id],
-        ))
-    except:
-        pass
+        )
+    except Exception as e:
+        logging.error(f"del unwarn: {e}")
     msg_id = warn_messages.pop(t, None)
     if msg_id:
         try:
-            await bot(EditMessageText(
+            await bot.edit_message_text(
                 business_connection_id=message.business_connection_id,
                 chat_id=message.chat.id,
                 message_id=msg_id,
                 text="✅ *Предупреждения сняты. ⚠️ 0/5*",
                 parse_mode="Markdown",
-            ))
+            )
             return
         except:
             pass
     await message.answer("✅ Предупреждения сняты.")
+
 
 @dp.business_message(F.text.startswith(".spam"))
 async def b_spam(message: types.Message):
@@ -434,12 +471,12 @@ async def b_spam(message: types.Message):
     if not await check_business_subscription(message):
         return
     try:
-        await bot(DeleteBusinessMessages(
+        await bot.delete_business_messages(
             business_connection_id=message.business_connection_id,
             message_ids=[message.message_id],
-        ))
-    except:
-        pass
+        )
+    except Exception as e:
+        logging.error(f"del spam cmd: {e}")
     parts = message.text.split(maxsplit=2)
     if len(parts) < 3:
         await message.answer("Использование: `.spam N текст`")
@@ -450,10 +487,16 @@ async def b_spam(message: types.Message):
         n = 1
     for _ in range(n):
         try:
-            await message.answer(parts[2])
+            await bot.send_message(
+                message.chat.id,
+                parts[2],
+                business_connection_id=message.business_connection_id,
+            )
             await asyncio.sleep(0.15)
-        except:
+        except Exception as e:
+            logging.error(f"spam send: {e}")
             await asyncio.sleep(0.4)
+
 
 @dp.business_message(F.text.startswith(".clone"))
 async def b_clone(message: types.Message):
@@ -465,13 +508,13 @@ async def b_clone(message: types.Message):
     state = parts[1].lower() if len(parts) > 1 else "on"
     clone[message.chat.id] = (state == "on")
     try:
-        await bot(DeleteBusinessMessages(
+        await bot.delete_business_messages(
             business_connection_id=message.business_connection_id,
             message_ids=[message.message_id],
-        ))
-    except:
-        pass
-    await message.answer(f"🔄 Автоповтор {'включён' if state == 'on' else 'выключен'}")
+        )
+    except Exception as e:
+        logging.error(f"del clone: {e}")
+
 
 @dp.business_message(F.text.startswith(".st"))
 async def b_st(message: types.Message):
@@ -480,32 +523,27 @@ async def b_st(message: types.Message):
     if not await check_business_subscription(message):
         return
     try:
-        await bot(DeleteBusinessMessages(
+        await bot.delete_business_messages(
             business_connection_id=message.business_connection_id,
             message_ids=[message.message_id],
-        ))
+        )
     except Exception as e:
-        logging.error(f"Не смог удалить .st: {e}")
+        logging.error(f"del .st: {e}")
     text = message.text[3:].strip()
     if not text:
-        await message.answer("Использование: `.st текст`")
         return
-    words = text.split()
-    logging.info(f"ST: {len(words)} слов")
-    for word in words:
+    for word in text.split():
         try:
-            await message.answer(word)
+            await bot.send_message(
+                message.chat.id,
+                word,
+                business_connection_id=message.business_connection_id,
+            )
             await asyncio.sleep(0.15)
         except Exception as e:
-            logging.error(f"ST ошибка: {e}")
-            if "retry after" in str(e).lower():
-                await asyncio.sleep(2)
-                try:
-                    await message.answer(word)
-                except:
-                    pass
-            else:
-                await asyncio.sleep(0.4)
+            logging.error(f"st send: {e}")
+            await asyncio.sleep(0.4)
+
 
 @dp.business_message(F.text.startswith(".history"))
 async def b_history(message: types.Message):
@@ -517,14 +555,13 @@ async def b_history(message: types.Message):
     parts = message.text.split()
     n = int(parts[1]) if len(parts) > 1 else 10
     try:
-        await bot(DeleteBusinessMessages(
+        await bot.delete_business_messages(
             business_connection_id=message.business_connection_id,
             message_ids=[message.message_id],
-        ))
-    except:
-        pass
+        )
+    except Exception as e:
+        logging.error(f"del hist: {e}")
     if t not in message_cache or not message_cache[t]:
-        await message.answer("📭 История пуста.")
         return
     items = sorted(message_cache[t].items(), key=lambda x: x[1]["time"])[-n:]
     owner_id = await get_owner_id(message.business_connection_id)
@@ -534,7 +571,16 @@ async def b_history(message: types.Message):
         text += f"*{sender}* ({data['time']}):\n`{data['text'][:200]}`\n\n"
     if len(text) > 4000:
         text = text[:4000] + "\n...(обрезано)"
-    await message.answer(text, parse_mode="Markdown")
+    try:
+        await bot.send_message(
+            message.chat.id,
+            text,
+            parse_mode="Markdown",
+            business_connection_id=message.business_connection_id,
+        )
+    except:
+        pass
+
 
 # ================== ОБРАБОТКА ВСЕХ БИЗНЕС-СООБЩЕНИЙ ==================
 @dp.business_message()
@@ -542,24 +588,6 @@ async def b_default(message: types.Message):
     t = message.chat.id
     owner_id = await get_owner_id(message.business_connection_id)
     msg_from = message.from_user.id if message.from_user else 0
-
-    if t in message_cache and message.message_id in message_cache[t]:
-        old = message_cache[t][message.message_id]
-        new_text = message.text or "[медиа]"
-        if old["text"] != new_text and msg_from != owner_id:
-            try:
-                await bot.send_message(
-                    owner_id,
-                    f"✏️ *Сообщение изменено*\n\n"
-                    f"👤 От: @{message.from_user.username or message.from_user.first_name}\n"
-                    f"📝 Было: `{old['text'][:200]}`\n"
-                    f"📝 Стало: `{new_text[:200]}`\n"
-                    f"🕐 {datetime.now().strftime('%H:%M:%S')}",
-                    parse_mode="Markdown"
-                )
-            except:
-                pass
-        message_cache[t][message.message_id]["text"] = new_text
 
     if t not in message_cache:
         message_cache[t] = {}
@@ -575,30 +603,28 @@ async def b_default(message: types.Message):
     if t in mutes and mutes[t] > datetime.now():
         if msg_from != owner_id:
             try:
-                await bot(DeleteBusinessMessages(
+                await bot.delete_business_messages(
                     business_connection_id=message.business_connection_id,
                     message_ids=[message.message_id],
-                ))
-                try:
-                    await bot.send_message(
-                        owner_id,
-                        f"🗑 *Удалено (мут)*\n\n"
-                        f"👤 От: @{message.from_user.username or message.from_user.first_name}\n"
-                        f"📝 `{(message.text or '[медиа]')[:200]}`\n"
-                        f"🕐 {datetime.now().strftime('%H:%M:%S')}",
-                        parse_mode="Markdown"
-                    )
-                except:
-                    pass
+                )
             except Exception as e:
                 logging.error(f"Ошибка удаления: {e}")
             return
 
     if t in mutes and mutes[t] <= datetime.now():
-        mutes.pop(t, None); warns.pop(t, None)
+        mutes.pop(t, None)
+        warns.pop(t, None)
 
     if clone.get(t) and message.text and msg_from != owner_id:
-        await message.answer(message.text)
+        try:
+            await bot.send_message(
+                t,
+                message.text,
+                business_connection_id=message.business_connection_id,
+            )
+        except Exception as e:
+            logging.error(f"clone: {e}")
+
 
 # ================== ЗАПУСК ==================
 async def main():
@@ -607,7 +633,7 @@ async def main():
     print(f"✅ Bot started: @{me.username}")
     await dp.start_polling(bot, drop_pending_updates=True)
 
+
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     asyncio.run(main())
-
