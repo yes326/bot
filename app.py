@@ -84,8 +84,9 @@ async def delete_cmd(message: types.Message):
             business_connection_id=message.business_connection_id,
             message_ids=[message.message_id],
         )
+        logging.info(f"✅ Удалена команда: {message.text[:30]}")
     except Exception as e:
-        logging.error(f"delete_cmd failed: {e}")
+        logging.error(f"❌ Ошибка удаления: {type(e).__name__}: {e}")
 
 
 async def send_confirm(chat_id, text, conn_id, seconds=3):
@@ -517,17 +518,9 @@ async def b_unmute(message: types.Message):
     await delete_cmd(message)
 
     if was_muted:
-        await send_confirm(
-            message.chat.id,
-            "🔊 <b>Мут снят</b>",
-            message.business_connection_id,
-        )
+        await send_confirm(message.chat.id, "🔊 <b>Мут снят</b>", message.business_connection_id)
     else:
-        await send_confirm(
-            message.chat.id,
-            "ℹ️ <b>Мут не был активен</b>",
-            message.business_connection_id,
-        )
+        await send_confirm(message.chat.id, "ℹ️ <b>Мут не был активен</b>", message.business_connection_id)
 
 
 @dp.business_message(F.text.startswith(".warn"))
@@ -616,11 +609,7 @@ async def b_unwarn(message: types.Message):
             return
         except:
             pass
-    await send_confirm(
-        message.chat.id,
-        "✅ <b>Предупреждения сняты</b>",
-        message.business_connection_id,
-    )
+    await send_confirm(message.chat.id, "✅ <b>Предупреждения сняты</b>", message.business_connection_id)
 
 
 @dp.business_message(F.text.startswith(".spam"))
