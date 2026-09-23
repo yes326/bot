@@ -66,7 +66,6 @@ dp = Dispatcher(storage=MemoryStorage())
 
 # ================== УТИЛИТЫ ==================
 async def auto_delete(chat_id, message_id, conn_id, seconds=3):
-    """Удаляет сообщение через N секунд."""
     await asyncio.sleep(seconds)
     try:
         await bot.delete_business_messages(
@@ -78,7 +77,6 @@ async def auto_delete(chat_id, message_id, conn_id, seconds=3):
 
 
 async def delete_cmd(message: types.Message):
-    """Удаляет команду пользователя (собеседник её не увидит)."""
     try:
         await bot.delete_business_messages(
             business_connection_id=message.business_connection_id,
@@ -90,7 +88,6 @@ async def delete_cmd(message: types.Message):
 
 
 async def delete_silent(chat_id, message_id, conn_id):
-    """Удаляет сообщение (без логов)."""
     try:
         await bot.delete_business_messages(
             business_connection_id=conn_id,
@@ -103,7 +100,6 @@ async def delete_silent(chat_id, message_id, conn_id):
 
 
 async def send_confirm(chat_id, text, conn_id, seconds=3):
-    """Отправляет подтверждение и удаляет его через N секунд."""
     try:
         msg = await bot.send_message(
             chat_id,
@@ -524,13 +520,10 @@ async def b_unmute(message: types.Message):
         return
     if not await check_business_subscription(message):
         return
-
     was_muted = message.chat.id in mutes
     mutes.pop(message.chat.id, None)
     warns.pop(message.chat.id, None)
-
     await delete_cmd(message)
-
     if was_muted:
         await send_confirm(message.chat.id, "🔊 <b>Мут снят</b>", message.business_connection_id)
     else:
@@ -543,16 +536,12 @@ async def b_warn(message: types.Message):
         return
     if not await check_business_subscription(message):
         return
-
     parts = message.text.split()
     n = int(parts[1]) if len(parts) > 1 else 1
     t = message.chat.id
-
     await delete_cmd(message)
-
     warns[t] = min(warns.get(t, 0) + n, WARN_LIMIT)
     text = f"⚠️ <b>Предупреждений: {warns[t]}/{WARN_LIMIT}</b>"
-
     msg_id = warn_messages.get(t)
     if msg_id:
         try:
@@ -579,7 +568,6 @@ async def b_warn(message: types.Message):
             parse_mode="HTML",
         )
         warn_messages[t] = new_msg.message_id
-
     if warns[t] >= WARN_LIMIT:
         mutes[t] = datetime.now() + timedelta(minutes=WARN_MUTE_MINUTES)
         try:
@@ -603,13 +591,10 @@ async def b_unwarn(message: types.Message):
         return
     if not await check_business_subscription(message):
         return
-
     t = message.chat.id
     warns.pop(t, None)
     mutes.pop(t, None)
-
     await delete_cmd(message)
-
     msg_id = warn_messages.pop(t, None)
     if msg_id:
         try:
@@ -632,9 +617,7 @@ async def b_spam(message: types.Message):
         return
     if not await check_business_subscription(message):
         return
-
     await delete_cmd(message)
-
     parts = message.text.split(maxsplit=2)
     if len(parts) < 3:
         await send_confirm(
@@ -666,14 +649,11 @@ async def b_clone(message: types.Message):
         return
     if not await check_business_subscription(message):
         return
-
     parts = message.text.split()
     state = parts[1].lower() if len(parts) > 1 else "on"
     is_on = (state == "on")
     clone[message.chat.id] = is_on
-
     await delete_cmd(message)
-
     await send_confirm(
         message.chat.id,
         f"🔄 <b>Автоповтор {'включён' if is_on else 'выключен'}</b>",
@@ -687,9 +667,7 @@ async def b_st(message: types.Message):
         return
     if not await check_business_subscription(message):
         return
-
     await delete_cmd(message)
-
     text = message.text[3:].strip()
     if not text:
         return
@@ -712,13 +690,10 @@ async def b_history(message: types.Message):
         return
     if not await check_business_subscription(message):
         return
-
     t = message.chat.id
     parts = message.text.split()
     n = int(parts[1]) if len(parts) > 1 else 10
-
     await delete_cmd(message)
-
     if t not in message_cache or not message_cache[t]:
         return
     items = sorted(message_cache[t].items(), key=lambda x: x[1]["time"])[-n:]
@@ -729,7 +704,6 @@ async def b_history(message: types.Message):
         text += f"<b>{sender}</b> ({data['time']}):\n<code>{data['text'][:200]}</code>\n\n"
     if len(text) > 4000:
         text = text[:4000] + "\n...(обрезано)"
-
     try:
         msg = await bot.send_message(
             message.chat.id,
@@ -750,13 +724,11 @@ async def b_default(message: types.Message):
     msg_from = message.from_user.id if message.from_user else 0
     text = message.text or ""
 
-    # ЛОГИРУЕМ ВСЁ
     logging.info(
         f"📨 BUSINESS | chat={t} | from={msg_from} | owner={owner_id} | "
         f"mute={'YES' if t in mutes else 'no'} | text={text[:40]!r}"
     )
 
-    # Сохраняем в кэш
     if t not in message_cache:
         message_cache[t] = {}
     message_cache[t][message.message_id] = {
@@ -771,14 +743,12 @@ async def b_default(message: types.Message):
     # === 1. ПРОВЕРКА МУТА ===
     if t in mutes:
         if mutes[t] > datetime.now():
-            # Собеседник замучен → удаляем его сообщения
             if msg_from != owner_id:
                 logging.info(f"🔇 Собеседник замучен, удаляю сообщение {message.message_id}")
                 ok = await delete_silent(t, message.message_id, message.business_connection_id)
                 logging.info(f"🔇 Удаление: {'OK' if ok else 'FAIL'}")
             return
         else:
-            # Мут истёк
             mutes.pop(t, None)
             warns.pop(t, None)
             logging.info(f"🔇 Мут истёк для chat={t}")
@@ -801,7 +771,18 @@ async def main():
     bot.username = me.username
     print(f"✅ Bot started: @{me.username}")
     await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot, drop_pending_updates=True)
+    await dp.start_polling(
+        bot,
+        drop_pending_updates=True,
+        allowed_updates=[
+            "message",
+            "callback_query",
+            "business_connection",
+            "business_message",
+            "edited_business_message",
+            "deleted_business_messages",
+        ],
+    )
 
 
 if __name__ == "__main__":
