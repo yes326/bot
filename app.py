@@ -84,9 +84,22 @@ async def delete_cmd(message: types.Message):
             business_connection_id=message.business_connection_id,
             message_ids=[message.message_id],
         )
-        logging.info(f"✅ Удалена команда: {message.text[:30]}")
+        logging.info(f"✅ Удалена команда: {(message.text or '')[:30]}")
     except Exception as e:
-        logging.error(f"❌ Ошибка удаления: {type(e).__name__}: {e}")
+        logging.error(f"❌ Ошибка удаления команды: {type(e).__name__}: {e}")
+
+
+async def delete_silent(chat_id, message_id, conn_id):
+    """Удаляет сообщение (без логов)."""
+    try:
+        await bot.delete_business_messages(
+            business_connection_id=conn_id,
+            message_ids=[message_id],
+        )
+        return True
+    except Exception as e:
+        logging.error(f"❌ delete_silent: {type(e).__name__}: {e}")
+        return False
 
 
 async def send_confirm(chat_id, text, conn_id, seconds=3):
@@ -497,6 +510,7 @@ async def b_mute(message: types.Message):
     parts = message.text.split()
     m = int(parts[1]) if len(parts) > 1 else 10
     mutes[message.chat.id] = datetime.now() + timedelta(minutes=m)
+    logging.info(f"🔇 Мут установлен: chat={message.chat.id} до {mutes[message.chat.id]}")
     await send_confirm(
         message.chat.id,
         f"🔇 <b>Мут на {m} мин</b>",
@@ -728,17 +742,25 @@ async def b_history(message: types.Message):
         pass
 
 
-# ================== ОБРАБОТКА ВСЕХ БИЗНЕС-СООБЩЕНИЙ ==================
+# ================== ОБРАБОТКА ВСЕХ БИЗНЕС-СООБЩЕНИЙ (ЛОВИТ ВСЁ) ==================
 @dp.business_message()
 async def b_default(message: types.Message):
     t = message.chat.id
     owner_id = await get_owner_id(message.business_connection_id)
     msg_from = message.from_user.id if message.from_user else 0
+    text = message.text or ""
 
+    # ЛОГИРУЕМ ВСЁ
+    logging.info(
+        f"📨 BUSINESS | chat={t} | from={msg_from} | owner={owner_id} | "
+        f"mute={'YES' if t in mutes else 'no'} | text={text[:40]!r}"
+    )
+
+    # Сохраняем в кэш
     if t not in message_cache:
         message_cache[t] = {}
     message_cache[t][message.message_id] = {
-        "text": message.text or "[медиа]",
+        "text": text or "[медиа]",
         "time": message.date.strftime("%Y-%m-%d %H:%M:%S"),
         "sender": msg_from,
     }
@@ -746,26 +768,27 @@ async def b_default(message: types.Message):
         oldest = sorted(message_cache[t].keys())[0]
         message_cache[t].pop(oldest, None)
 
-    if t in mutes and mutes[t] > datetime.now():
-        if msg_from != owner_id:
-            try:
-                await bot.delete_business_messages(
-                    business_connection_id=message.business_connection_id,
-                    message_ids=[message.message_id],
-                )
-            except Exception as e:
-                logging.error(f"Ошибка удаления: {e}")
+    # === 1. ПРОВЕРКА МУТА ===
+    if t in mutes:
+        if mutes[t] > datetime.now():
+            # Собеседник замучен → удаляем его сообщения
+            if msg_from != owner_id:
+                logging.info(f"🔇 Собеседник замучен, удаляю сообщение {message.message_id}")
+                ok = await delete_silent(t, message.message_id, message.business_connection_id)
+                logging.info(f"🔇 Удаление: {'OK' if ok else 'FAIL'}")
             return
+        else:
+            # Мут истёк
+            mutes.pop(t, None)
+            warns.pop(t, None)
+            logging.info(f"🔇 Мут истёк для chat={t}")
 
-    if t in mutes and mutes[t] <= datetime.now():
-        mutes.pop(t, None)
-        warns.pop(t, None)
-
-    if clone.get(t) and message.text and msg_from != owner_id:
+    # === 2. CLONE ===
+    if clone.get(t) and text and msg_from != owner_id and not text.startswith("."):
         try:
             await bot.send_message(
                 t,
-                message.text,
+                text,
                 business_connection_id=message.business_connection_id,
             )
         except Exception as e:
