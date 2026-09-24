@@ -69,7 +69,7 @@ dp = Dispatcher(storage=MemoryStorage())
 
 # ================== УТИЛИТЫ ==================
 async def bot_api(method: str, data: dict):
-    """Прямой вызов Bot API через aiohttp (обход aiogram 3.15)."""
+    """Прямой вызов Bot API через aiohttp."""
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
     try:
         async with aiohttp.ClientSession() as session:
@@ -102,16 +102,18 @@ async def auto_delete(chat_id, message_id, conn_id, seconds=3):
 
 
 async def delete_cmd(message: types.Message):
+    """Удаляет сообщение-команду в бизнес-чате."""
     if not message.business_connection_id:
         return
     try:
         await delete_business_msg(message.business_connection_id, [message.message_id])
         logging.info(f"✅ Удалена команда: {(message.text or '')[:30]}")
     except Exception as e:
-        logging.error(f"❌ Ошибка удаления: {type(e).__name__}: {e}")
+        logging.error(f"❌ Ошибка удаления команды: {type(e).__name__}: {e}")
 
 
 async def delete_silent(chat_id, message_id, conn_id):
+    """Удаляет сообщение собеседника (при муте)."""
     try:
         result = await delete_business_msg(conn_id, [message_id])
         return result is not None
@@ -120,14 +122,20 @@ async def delete_silent(chat_id, message_id, conn_id):
         return False
 
 
-async def send_confirm(chat_id, text, conn_id, seconds=3):
+async def send_confirm(chat_id, text, conn_id, seconds=None):
+    """
+    Отправляет подтверждение.
+    seconds=None (по умолчанию) — сообщение НЕ удаляется.
+    seconds=N — удаляется через N секунд.
+    """
     try:
         msg = await bot.send_message(
             chat_id, text,
             business_connection_id=conn_id,
             parse_mode="HTML",
         )
-        asyncio.create_task(auto_delete(chat_id, msg.message_id, conn_id, seconds))
+        if seconds is not None:
+            asyncio.create_task(auto_delete(chat_id, msg.message_id, conn_id, seconds))
         return msg
     except Exception as e:
         logging.error(f"send_confirm failed: {e}")
@@ -169,22 +177,6 @@ async def get_owner_id(business_connection_id):
 async def is_owner(message: types.Message):
     owner_id = await get_owner_id(message.business_connection_id)
     return owner_id is not None and message.from_user.id == owner_id
-
-
-async def check_business_subscription(message: types.Message):
-    owner_id = await get_owner_id(message.business_connection_id)
-    if owner_id is None:
-        return False
-    if not await check_subscription(owner_id):
-        try:
-            await message.answer(
-                f"⚠️ <b>Для использования бота подпишись на канал:</b>\n{CHANNEL_LINK}",
-                parse_mode="HTML"
-            )
-        except:
-            pass
-        return False
-    return True
 
 
 # ================== КЛАВИАТУРЫ ==================
@@ -442,6 +434,7 @@ async def handle_business_command(message: types.Message, text: str):
     t = message.chat.id
     logging.info(f"⚙️ Обрабатываю команду: {text[:40]!r} conn={conn_id}")
 
+    # .help — НЕ удаляем команду (некуда девать)
     if text == ".help":
         await send_confirm(t, "📖 <b>Команды:</b>\n\n"
                             "<code>.mute N</code> · <code>.unmute</code>\n"
@@ -450,11 +443,15 @@ async def handle_business_command(message: types.Message, text: str):
                             "<code>.st текст</code>\n"
                             "<code>.clone on/off</code>\n"
                             "<code>.history N</code>",
-                            conn_id, seconds=15)
+                            conn_id)
         return
+
+    # Для ВСЕХ остальных команд — удаляем саму команду
+    await delete_cmd(message)
 
     parts = text.split()
 
+    # ========== .mute N ==========
     if text.startswith(".mute"):
         try: m = int(parts[1]) if len(parts) > 1 else 10
         except ValueError: m = 10
@@ -463,26 +460,53 @@ async def handle_business_command(message: types.Message, text: str):
         await send_confirm(t, f"🔇 <b>Мут на {m} мин</b>", conn_id)
         return
 
+    # ========== .unmute ==========
     if text.startswith(".unmute"):
         was = conn_id in mutes
         mutes.pop(conn_id, None); warns.pop(conn_id, None)
         await send_confirm(t, "🔊 <b>Мут снят</b>" if was else "ℹ️ <b>Мут не активен</b>", conn_id)
         return
 
+    # ========== .warn N ==========
     if text.startswith(".warn"):
         try: n = int(parts[1]) if len(parts) > 1 else 1
         except ValueError: n = 1
         warns[conn_id] = min(warns.get(conn_id, 0) + n, WARN_LIMIT)
-        await send_confirm(t, f"⚠️ <b>Предупреждений: {warns[conn_id]}/{WARN_LIMIT}</b>", conn_id)
+        logging.info(f"⚠️ Warn: conn={conn_id} → {warns[conn_id]}/{WARN_LIMIT}")
+
+        # Удаляем последнее сообщение собеседника (если есть)
+        try:
+            await bot.send_message(
+                t,
+                f"⚠️ <b>Предупреждений: {warns[conn_id]}/{WARN_LIMIT}</b>",
+                business_connection_id=conn_id,
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            logging.error(f"warn send: {e}")
+
+        # Авто-мут при достижении лимита
         if warns[conn_id] >= WARN_LIMIT:
             mutes[conn_id] = datetime.now() + timedelta(minutes=WARN_MUTE_MINUTES)
+            logging.info(f"🔇 Warn-limit достигнут, авто-мут conn={conn_id} на {WARN_MUTE_MINUTES} мин")
+            try:
+                await bot.send_message(
+                    t,
+                    f"🔇 <b>Мут на {WARN_MUTE_MINUTES} мин</b> (лимит предупреждений)",
+                    business_connection_id=conn_id,
+                    parse_mode="HTML",
+                )
+            except Exception as e:
+                logging.error(f"warn mute: {e}")
         return
 
+    # ========== .unwarn ==========
     if text.startswith(".unwarn"):
         warns.pop(conn_id, None); mutes.pop(conn_id, None)
         await send_confirm(t, "✅ <b>Предупреждения сняты</b>", conn_id)
         return
 
+    # ========== .spam N текст ==========
     if text.startswith(".spam"):
         parts2 = text.split(maxsplit=2)
         if len(parts2) < 3:
@@ -499,12 +523,14 @@ async def handle_business_command(message: types.Message, text: str):
                 break
         return
 
+    # ========== .clone on/off ==========
     if text.startswith(".clone"):
         state = parts[1].lower() == "on" if len(parts) > 1 else True
         clone[conn_id] = state
         await send_confirm(t, f"🔄 <b>Автоповтор {'включён' if state else 'выключен'}</b>", conn_id)
         return
 
+    # ========== .st текст ==========
     if text.startswith(".st"):
         body = text[3:].strip()
         if not body: return
@@ -515,6 +541,7 @@ async def handle_business_command(message: types.Message, text: str):
             except: break
         return
 
+    # ========== .history N ==========
     if text.startswith(".history"):
         try: n = int(parts[1]) if len(parts) > 1 else 10
         except: n = 10
@@ -525,7 +552,7 @@ async def handle_business_command(message: types.Message, text: str):
         out = f"📜 <b>Последние {len(items)}:</b>\n\n"
         for _, data in items:
             out += f"<code>{data['time']}</code> <b>{data['sender']}</b>: {data['text'][:100]}\n"
-        await send_confirm(t, out[:4000], conn_id, seconds=20)
+        await send_confirm(t, out[:4000], conn_id)
         return
 
 
