@@ -29,7 +29,7 @@ PRICES = {
 }
 TRIAL_DAYS = 7
 WARN_LIMIT = 5
-WARN_MUTE_MINUTES = 5
+WARN_MUTE_MINUTES = 60     # ← мут на 60 минут при 5/5
 
 BANNER_PATH = os.path.join(os.path.dirname(__file__), "IMG_20260918_155302_695.jpg")
 
@@ -93,6 +93,17 @@ async def delete_business_msg(conn_id, message_ids):
     })
 
 
+async def edit_business_msg(conn_id, chat_id, message_id, text):
+    """Редактирует бизнес-сообщение через прямой Bot API."""
+    return await bot_api("editMessageText", {
+        "business_connection_id": conn_id,
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": text,
+        "parse_mode": "HTML",
+    })
+
+
 async def auto_delete(chat_id, message_id, conn_id, seconds=3):
     await asyncio.sleep(seconds)
     try:
@@ -125,7 +136,7 @@ async def delete_silent(chat_id, message_id, conn_id):
 async def send_confirm(chat_id, text, conn_id, seconds=None):
     """
     Отправляет подтверждение.
-    seconds=None (по умолчанию) — сообщение НЕ удаляется.
+    seconds=None — НЕ удаляется.
     seconds=N — удаляется через N секунд.
     """
     try:
@@ -434,16 +445,17 @@ async def handle_business_command(message: types.Message, text: str):
     t = message.chat.id
     logging.info(f"⚙️ Обрабатываю команду: {text[:40]!r} conn={conn_id}")
 
-    # .help — НЕ удаляем команду (некуда девать)
+    # .help — команда НЕ удаляется
     if text == ".help":
-        await send_confirm(t, "📖 <b>Команды:</b>\n\n"
-                            "<code>.mute N</code> · <code>.unmute</code>\n"
-                            "<code>.warn N</code> · <code>.unwarn</code>\n"
-                            "<code>.spam N текст</code>\n"
-                            "<code>.st текст</code>\n"
-                            "<code>.clone on/off</code>\n"
-                            "<code>.history N</code>",
-                            conn_id)
+        await send_confirm(t,
+            "📖 <b>Команды:</b>\n\n"
+            "<code>.mute N</code> · <code>.unmute</code>\n"
+            "<code>.warn N</code> · <code>.unwarn</code>\n"
+            "<code>.spam N текст</code>\n"
+            "<code>.st текст</code>\n"
+            "<code>.clone on/off</code>\n"
+            "<code>.history N</code>",
+            conn_id)
         return
 
     # Для ВСЕХ остальных команд — удаляем саму команду
@@ -464,6 +476,8 @@ async def handle_business_command(message: types.Message, text: str):
     if text.startswith(".unmute"):
         was = conn_id in mutes
         mutes.pop(conn_id, None); warns.pop(conn_id, None)
+        # Очистим сообщение с варнами
+        warn_messages.pop(conn_id, None)
         await send_confirm(t, "🔊 <b>Мут снят</b>" if was else "ℹ️ <b>Мут не активен</b>", conn_id)
         return
 
@@ -474,36 +488,47 @@ async def handle_business_command(message: types.Message, text: str):
         warns[conn_id] = min(warns.get(conn_id, 0) + n, WARN_LIMIT)
         logging.info(f"⚠️ Warn: conn={conn_id} → {warns[conn_id]}/{WARN_LIMIT}")
 
-        # Удаляем последнее сообщение собеседника (если есть)
-        try:
-            await bot.send_message(
-                t,
-                f"⚠️ <b>Предупреждений: {warns[conn_id]}/{WARN_LIMIT}</b>",
-                business_connection_id=conn_id,
-                parse_mode="HTML",
-            )
-        except Exception as e:
-            logging.error(f"warn send: {e}")
+        text_warn = f"⚠️ <b>Предупреждений: {warns[conn_id]}/{WARN_LIMIT}</b>"
+        old_msg_id = warn_messages.get(conn_id)
 
-        # Авто-мут при достижении лимита
+        if old_msg_id:
+            # Пробуем отредактировать
+            result = await edit_business_msg(conn_id, t, old_msg_id, text_warn)
+            if result is None:
+                # Не получилось — создаём новое
+                new_msg = await bot.send_message(t, text_warn,
+                    business_connection_id=conn_id, parse_mode="HTML")
+                if new_msg:
+                    warn_messages[conn_id] = new_msg.message_id
+        else:
+            # Первое предупреждение
+            new_msg = await bot.send_message(t, text_warn,
+                business_connection_id=conn_id, parse_mode="HTML")
+            if new_msg:
+                warn_messages[conn_id] = new_msg.message_id
+
+        # При достижении лимита — мут на 60 мин
         if warns[conn_id] >= WARN_LIMIT:
             mutes[conn_id] = datetime.now() + timedelta(minutes=WARN_MUTE_MINUTES)
             logging.info(f"🔇 Warn-limit достигнут, авто-мут conn={conn_id} на {WARN_MUTE_MINUTES} мин")
-            try:
-                await bot.send_message(
-                    t,
-                    f"🔇 <b>Мут на {WARN_MUTE_MINUTES} мин</b> (лимит предупреждений)",
-                    business_connection_id=conn_id,
-                    parse_mode="HTML",
-                )
-            except Exception as e:
-                logging.error(f"warn mute: {e}")
+
+            text_muted = (
+                f"⚠️ <b>Предупреждений: {WARN_LIMIT}/{WARN_LIMIT}</b>\n"
+                f"🔇 <b>Мут на {WARN_MUTE_MINUTES} мин!</b>"
+            )
+            old_msg_id = warn_messages.get(conn_id)
+            if old_msg_id:
+                await edit_business_msg(conn_id, t, old_msg_id, text_muted)
         return
 
     # ========== .unwarn ==========
     if text.startswith(".unwarn"):
         warns.pop(conn_id, None); mutes.pop(conn_id, None)
-        await send_confirm(t, "✅ <b>Предупреждения сняты</b>", conn_id)
+        old_msg_id = warn_messages.pop(conn_id, None)
+        if old_msg_id:
+            await edit_business_msg(conn_id, t, old_msg_id, "✅ <b>Предупреждения сняты (0/5)</b>")
+        else:
+            await send_confirm(t, "✅ <b>Предупреждения сняты</b>", conn_id)
         return
 
     # ========== .spam N текст ==========
@@ -599,6 +624,7 @@ async def b_default(message: types.Message):
         else:
             mutes.pop(conn_id, None)
             warns.pop(conn_id, None)
+            warn_messages.pop(conn_id, None)
 
     # КЛОН
     if conn_id and clone.get(conn_id) and text and msg_from != owner_id and not text.startswith("."):
