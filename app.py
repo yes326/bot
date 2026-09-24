@@ -7,6 +7,7 @@ import os
 import logging
 import threading
 import asyncio
+import aiohttp
 from datetime import datetime, timedelta
 from flask import Flask
 from aiogram import Bot, Dispatcher, types, F
@@ -68,8 +69,16 @@ dp = Dispatcher(storage=MemoryStorage())
 
 # ================== УТИЛИТЫ ==================
 async def bot_api(method: str, data: dict):
+    """Прямой вызов Bot API через aiohttp (обход aiogram 3.15)."""
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
     try:
-        return await bot.session.make_request(method=method, data=data)
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=data) as resp:
+                result = await resp.json()
+                if not result.get("ok"):
+                    logging.error(f"❌ bot_api({method}): {result}")
+                    return None
+                return result
     except Exception as e:
         logging.error(f"❌ bot_api({method}): {type(e).__name__}: {e}")
         return None
