@@ -29,7 +29,7 @@ PRICES = {
 }
 TRIAL_DAYS = 7
 WARN_LIMIT = 5
-WARN_MUTE_MINUTES = 60     # ← мут на 60 минут при 5/5
+WARN_MUTE_MINUTES = 60
 
 BANNER_PATH = os.path.join(os.path.dirname(__file__), "IMG_20260918_155302_695.jpg")
 
@@ -93,17 +93,6 @@ async def delete_business_msg(conn_id, message_ids):
     })
 
 
-async def edit_business_msg(conn_id, chat_id, message_id, text):
-    """Редактирует бизнес-сообщение через прямой Bot API."""
-    return await bot_api("editMessageText", {
-        "business_connection_id": conn_id,
-        "chat_id": chat_id,
-        "message_id": message_id,
-        "text": text,
-        "parse_mode": "HTML",
-    })
-
-
 async def auto_delete(chat_id, message_id, conn_id, seconds=3):
     await asyncio.sleep(seconds)
     try:
@@ -151,6 +140,18 @@ async def send_confirm(chat_id, text, conn_id, seconds=None):
     except Exception as e:
         logging.error(f"send_confirm failed: {e}")
         return None
+
+
+async def delete_warn_msg(conn_id):
+    """Удаляет предыдущее warn-сообщение (если есть)."""
+    old_msg_id = warn_messages.get(conn_id)
+    if old_msg_id:
+        try:
+            await delete_business_msg(conn_id, [old_msg_id])
+            logging.info(f"🗑 Удалено warn-сообщение {old_msg_id}")
+        except Exception as e:
+            logging.error(f"del warn msg: {e}")
+        warn_messages.pop(conn_id, None)
 
 
 # ================== ПОДПИСКА ==================
@@ -458,7 +459,7 @@ async def handle_business_command(message: types.Message, text: str):
             conn_id)
         return
 
-    # Для ВСЕХ остальных команд — удаляем саму команду
+    # Удаляем саму команду
     await delete_cmd(message)
 
     parts = text.split()
@@ -475,60 +476,53 @@ async def handle_business_command(message: types.Message, text: str):
     # ========== .unmute ==========
     if text.startswith(".unmute"):
         was = conn_id in mutes
-        mutes.pop(conn_id, None); warns.pop(conn_id, None)
-        # Очистим сообщение с варнами
-        warn_messages.pop(conn_id, None)
+        mutes.pop(conn_id, None)
+        warns.pop(conn_id, None)
+        await delete_warn_msg(conn_id)
         await send_confirm(t, "🔊 <b>Мут снят</b>" if was else "ℹ️ <b>Мут не активен</b>", conn_id)
         return
 
-    # ========== .warn N ==========
+    # ========== .warn N — удаляем старое + создаём новое ==========
     if text.startswith(".warn"):
         try: n = int(parts[1]) if len(parts) > 1 else 1
         except ValueError: n = 1
         warns[conn_id] = min(warns.get(conn_id, 0) + n, WARN_LIMIT)
         logging.info(f"⚠️ Warn: conn={conn_id} → {warns[conn_id]}/{WARN_LIMIT}")
 
+        # Удаляем старое warn-сообщение
+        await delete_warn_msg(conn_id)
+
+        # Отправляем новое
         text_warn = f"⚠️ <b>Предупреждений: {warns[conn_id]}/{WARN_LIMIT}</b>"
-        old_msg_id = warn_messages.get(conn_id)
+        new_msg = await bot.send_message(t, text_warn,
+            business_connection_id=conn_id, parse_mode="HTML")
+        if new_msg:
+            warn_messages[conn_id] = new_msg.message_id
+            logging.info(f"📩 Warn-сообщение {new_msg.message_id} ({warns[conn_id]}/{WARN_LIMIT})")
 
-        if old_msg_id:
-            # Пробуем отредактировать
-            result = await edit_business_msg(conn_id, t, old_msg_id, text_warn)
-            if result is None:
-                # Не получилось — создаём новое
-                new_msg = await bot.send_message(t, text_warn,
-                    business_connection_id=conn_id, parse_mode="HTML")
-                if new_msg:
-                    warn_messages[conn_id] = new_msg.message_id
-        else:
-            # Первое предупреждение
-            new_msg = await bot.send_message(t, text_warn,
-                business_connection_id=conn_id, parse_mode="HTML")
-            if new_msg:
-                warn_messages[conn_id] = new_msg.message_id
-
-        # При достижении лимита — мут на 60 мин
+        # Авто-мут при 5/5
         if warns[conn_id] >= WARN_LIMIT:
             mutes[conn_id] = datetime.now() + timedelta(minutes=WARN_MUTE_MINUTES)
             logging.info(f"🔇 Warn-limit достигнут, авто-мут conn={conn_id} на {WARN_MUTE_MINUTES} мин")
 
+            # Удаляем warn-сообщение и создаём новое — с мут-подтверждением
+            await delete_warn_msg(conn_id)
             text_muted = (
                 f"⚠️ <b>Предупреждений: {WARN_LIMIT}/{WARN_LIMIT}</b>\n"
                 f"🔇 <b>Мут на {WARN_MUTE_MINUTES} мин!</b>"
             )
-            old_msg_id = warn_messages.get(conn_id)
-            if old_msg_id:
-                await edit_business_msg(conn_id, t, old_msg_id, text_muted)
+            new_msg = await bot.send_message(t, text_muted,
+                business_connection_id=conn_id, parse_mode="HTML")
+            if new_msg:
+                warn_messages[conn_id] = new_msg.message_id
         return
 
     # ========== .unwarn ==========
     if text.startswith(".unwarn"):
-        warns.pop(conn_id, None); mutes.pop(conn_id, None)
-        old_msg_id = warn_messages.pop(conn_id, None)
-        if old_msg_id:
-            await edit_business_msg(conn_id, t, old_msg_id, "✅ <b>Предупреждения сняты (0/5)</b>")
-        else:
-            await send_confirm(t, "✅ <b>Предупреждения сняты</b>", conn_id)
+        warns.pop(conn_id, None)
+        mutes.pop(conn_id, None)
+        await delete_warn_msg(conn_id)
+        await send_confirm(t, "✅ <b>Предупреждения сняты (0/5)</b>", conn_id)
         return
 
     # ========== .spam N текст ==========
@@ -624,7 +618,7 @@ async def b_default(message: types.Message):
         else:
             mutes.pop(conn_id, None)
             warns.pop(conn_id, None)
-            warn_messages.pop(conn_id, None)
+            await delete_warn_msg(conn_id)
 
     # КЛОН
     if conn_id and clone.get(conn_id) and text and msg_from != owner_id and not text.startswith("."):
