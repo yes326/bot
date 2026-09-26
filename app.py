@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 AntiSpam Defender Bot — Business-бот с командами в бизнес-чате.
-Возможности: mutes, warns, clone, spam, history, anti-mute обход.
+Возможности: mutes, warns, clone, spam, history, nonmute (обход мута).
 """
 
 import os
@@ -34,9 +34,14 @@ TRIAL_DAYS = 7
 WARN_LIMIT = 5
 WARN_MUTE_MINUTES = 60
 
-# Анти-зацикливание: сколько сообщений от одного бота за минуту пропускаем
 BOT_RATE_LIMIT = 5
-BOT_RATE_WINDOW = 60  # секунд
+BOT_RATE_WINDOW = 60
+
+# Невидимые символы для обхода сравнения текста
+ZWSP = "\u200b"        # zero-width space
+ZWNJ = "\u200c"        # zero-width non-joiner
+ZWJ  = "\u200d"        # zero-width joiner
+INVISIBLES = [ZWSP, ZWNJ, ZWJ]
 
 BANNER_PATH = os.path.join(os.path.dirname(__file__), "IMG_20260918_155302_695.jpg")
 
@@ -54,10 +59,8 @@ referrals = {}
 username_cache = {}
 last_conn_by_chat = {}
 
-# Антимут — хранит последнее сообщение собеседника для дублирования
 nonmute_active = {}   # chat_id -> bool
-nonmute_last = {}     # chat_id -> {msg_id, text, sender_id, time}
-bot_rate = defaultdict(list)  # bot_id -> [timestamps]
+bot_rate = defaultdict(list)
 
 # ================== FLASK ==================
 flask_app = Flask(__name__)
@@ -81,7 +84,6 @@ dp = Dispatcher(storage=MemoryStorage())
 
 # ================== УТИЛИТЫ ==================
 async def bot_api(method: str, data: dict):
-    """Прямой вызов Bot API через aiohttp."""
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
     try:
         async with aiohttp.ClientSession() as session:
@@ -160,15 +162,38 @@ async def delete_warn_msg(chat_id):
 
 
 def check_bot_rate(bot_id: int) -> bool:
-    """True если можно обработать, False если лимит исчерпан."""
     now = time.time()
     history = bot_rate[bot_id]
-    # Очищаем старые записи
     history[:] = [t for t in history if now - t < BOT_RATE_WINDOW]
     if len(history) >= BOT_RATE_LIMIT:
         return False
     history.append(now)
     return True
+
+
+def distort(text: str, level: int = 1) -> str:
+    """
+    Искажает текст невидимыми символами, чтобы обойти сравнение по тексту.
+    level=1 → 1 символ в конце
+    level=2 → символы в конце и середине
+    level=3 → раскидываем по всему тексту
+    """
+    if not text:
+        return text
+    if level == 1:
+        return text + ZWSP
+    elif level == 2:
+        # Вставляем в середину и в конец
+        mid = len(text) // 2
+        return text[:mid] + ZWNJ + text[mid:] + ZWSP
+    else:
+        # Раскидываем символы
+        result = []
+        for i, ch in enumerate(text):
+            result.append(ch)
+            if i % 3 == 0:
+                result.append(INVISIBLES[i % len(INVISIBLES)])
+        return "".join(result) + ZWSP
 
 
 # ================== ПОДПИСКА ==================
@@ -303,15 +328,15 @@ async def cb_back(call: types.CallbackQuery):
 async def cb_cmds(call: types.CallbackQuery):
     await call.message.answer(
         "📖 <b>Команды:</b>\n\n"
-        "<code>.mute N</code> — замутить на N минут\n"
+        "<code>.mute N</code> — замутить\n"
         "<code>.unmute</code> — снять мут\n"
         "<code>.warn N</code> — предупреждения\n"
         "<code>.unwarn</code> — сбросить\n"
-        "<code>.spam N текст</code> — отправить N раз\n"
+        "<code>.spam N текст</code> — спам\n"
         "<code>.st текст</code> — по словам\n"
         "<code>.clone on/off</code> — автоповтор\n"
-        "<code>.history N</code> — последние N сообщений\n"
-        "<code>.nonmute</code> — обход чужого мута",
+        "<code>.history N</code> — история\n"
+        "<code>.nonmute on/off</code> — обход чужого мута",
         parse_mode="HTML", reply_markup=back_kb())
 
 
@@ -334,7 +359,7 @@ async def cb_trial(call: types.CallbackQuery):
     user_id = call.from_user.id
     now = datetime.now()
     if user_id in used_trials:
-        await call.answer("❌ Ты уже использовал!", show_alert=True); return
+        await call.answer("❌ Уже использовал!", show_alert=True); return
     if subscriptions.get(user_id) and subscriptions[user_id] > now:
         await call.answer("❌ Уже есть подписка!", show_alert=True); return
     used_trials.add(user_id)
@@ -352,7 +377,7 @@ async def cb_ref(call: types.CallbackQuery):
     link = f"https://t.me/{me.username}?start=ref_{call.from_user.id}"
     invited = len(referrals.get(call.from_user.id, set()))
     await call.message.answer(
-        f"👥 <b>Пригласить друга</b>\n\n<code>{link}</code>\n\n🎁 +3 дня за друга!\n📊 Приглашено: <b>{invited}</b>",
+        f"👥 <b>Пригласить друга</b>\n\n<code>{link}</code>\n\n🎁 +3 дня!\n📊 Приглашено: <b>{invited}</b>",
         parse_mode="HTML", reply_markup=back_kb())
     await call.answer()
 
@@ -379,7 +404,7 @@ async def cb_pay(call: types.CallbackQuery):
         [types.InlineKeyboardButton(text="🔙 Назад", callback_data="sub_menu")],
     ])
     await call.message.answer(
-        f"💳 <b>Оплата «{p['label']}»</b>\n\n💰 {p['rub']}₽\n💳 Карта: <code>{CARD_NUMBER}</code>\n\n📸 После перевода нажми «Я оплатил».",
+        f"💳 <b>Оплата «{p['label']}»</b>\n\n💰 {p['rub']}₽\n💳 Карта: <code>{CARD_NUMBER}</code>",
         parse_mode="HTML", reply_markup=kb)
 
 
@@ -405,7 +430,7 @@ async def on_screenshot(message: types.Message):
         await bot.send_photo(chat_id=OWNER_ID, photo=message.photo[-1].file_id,
             caption=f"💰 <b>Оплата</b>\n\n👤 @{user.username or user.first_name} (<code>{user.id}</code>)\n📦 {PRICES[plan]['label']} — {PRICES[plan]['rub']}₽",
             parse_mode="HTML", reply_markup=owner_kb)
-        await message.answer("✅ Скриншот отправлен!")
+        await message.answer("✅ Отправлено!")
         pending_payments.pop(user_id, None)
     except Exception as e:
         logging.error(f"Ошибка: {e}")
@@ -423,7 +448,7 @@ async def cb_approve(call: types.CallbackQuery):
     subscriptions[user_id] = max(current, now) + timedelta(days=days)
     try:
         await bot.send_message(user_id,
-            f"✅ <b>Оплата подтверждена!</b>\n\n💎 {days} дней.\n📅 До: <b>{subscriptions[user_id].strftime('%d.%m.%Y')}</b>",
+            f"✅ <b>Оплата подтверждена!</b>\n\n💎 {days} дней.",
             parse_mode="HTML")
     except: pass
     await call.message.edit_caption(caption=f"{call.message.caption}\n\n✅ <b>Подтверждено</b>", parse_mode="HTML")
@@ -464,7 +489,6 @@ async def handle_business_command(message: types.Message, text: str):
     t = message.chat.id
     logging.info(f"⚙️ Команда: {text[:40]!r} chat={t} conn={conn_id}")
 
-    # .help — не удаляем
     if text == ".help":
         await send_confirm(t,
             "📖 <b>Команды:</b>\n\n"
@@ -474,13 +498,11 @@ async def handle_business_command(message: types.Message, text: str):
             "<code>.st текст</code>\n"
             "<code>.clone on/off</code>\n"
             "<code>.history N</code>\n"
-            "<code>.nonmute</code> — вкл/выкл обход мута",
+            "<code>.nonmute on/off</code>",
             conn_id)
         return
 
-    # Удаляем команду
     await delete_cmd(message)
-
     parts = text.split()
 
     # ========== .mute N ==========
@@ -495,8 +517,7 @@ async def handle_business_command(message: types.Message, text: str):
     # ========== .unmute ==========
     if text.startswith(".unmute"):
         was = t in mutes
-        mutes.pop(t, None)
-        warns.pop(t, None)
+        mutes.pop(t, None); warns.pop(t, None)
         await delete_warn_msg(t)
         await send_confirm(t, "🔊 <b>Мут снят</b>" if was else "ℹ️ <b>Мут не активен</b>", conn_id)
         return
@@ -516,7 +537,7 @@ async def handle_business_command(message: types.Message, text: str):
 
         if warns[t] >= WARN_LIMIT:
             mutes[t] = datetime.now() + timedelta(minutes=WARN_MUTE_MINUTES)
-            logging.info(f"🔇 Warn-limit, авто-мут chat={t} на {WARN_MUTE_MINUTES} мин")
+            logging.info(f"🔇 Warn-limit, мут chat={t} на {WARN_MUTE_MINUTES} мин")
             await delete_warn_msg(t)
             text_muted = (f"⚠️ <b>Предупреждений: {WARN_LIMIT}/{WARN_LIMIT}</b>\n"
                           f"🔇 <b>Мут на {WARN_MUTE_MINUTES} мин!</b>")
@@ -528,8 +549,7 @@ async def handle_business_command(message: types.Message, text: str):
 
     # ========== .unwarn ==========
     if text.startswith(".unwarn"):
-        warns.pop(t, None)
-        mutes.pop(t, None)
+        warns.pop(t, None); mutes.pop(t, None)
         await delete_warn_msg(t)
         await send_confirm(t, "✅ <b>Предупреждения сняты (0/5)</b>", conn_id)
         return
@@ -583,19 +603,28 @@ async def handle_business_command(message: types.Message, text: str):
         await send_confirm(t, out[:4000], conn_id)
         return
 
-    # ========== .nonmute ==========
+    # ========== .nonmute on/off ==========
     if text.startswith(".nonmute"):
-        state = not nonmute_active.get(t, False)
         if len(parts) > 1:
             arg = parts[1].lower()
-            if arg == "on": state = True
-            elif arg == "off": state = False
+            if arg == "on":
+                state = True
+            elif arg == "off":
+                state = False
+            else:
+                await send_confirm(t, "ℹ️ <code>.nonmute on</code> или <code>.nonmute off</code>", conn_id)
+                return
+        else:
+            state = not nonmute_active.get(t, False)
+
         nonmute_active[t] = state
         logging.info(f"🛡 AntiMute chat={t} = {state}")
+
         await send_confirm(
             t,
             f"🛡 <b>Обход чужого мута: {'ВКЛ' if state else 'ВЫКЛ'}</b>\n\n"
-            f"<i>Когда включён, твои сообщения дублируются через бота — чужой мут их не удалит.</i>",
+            f"<i>Сообщения дублируются с невидимыми символами — "
+            f"чужой мут не сможет их сравнить и удалить.</i>",
             conn_id
         )
         return
@@ -611,7 +640,10 @@ async def b_default(message: types.Message):
     is_bot = message.from_user.is_bot if message.from_user else False
     text = message.text or ""
 
-    logging.info(f"🔵 BUSINESS: chat={t} from={msg_from} bot={is_bot} owner={owner_id} mute={'YES' if t in mutes else 'no'} nonmute={'YES' if nonmute_active.get(t) else 'no'} text={text[:40]!r}")
+    logging.info(f"🔵 BUSINESS: chat={t} from={msg_from} bot={is_bot} owner={owner_id} "
+                 f"mute={'YES' if t in mutes else 'no'} "
+                 f"nonmute={'ON' if nonmute_active.get(t) else 'off'} "
+                 f"text={text[:40]!r}")
 
     if conn_id:
         last_conn_by_chat[t] = conn_id
@@ -623,31 +655,15 @@ async def b_default(message: types.Message):
         await handle_business_command(message, text)
         return
 
-    # === СООБЩЕНИЕ ОТ ДРУГОГО БОТА ===
+    # === СООБЩЕНИЕ ОТ БОТА ===
     if is_bot and msg_from != bot.id:
-        # Анти-зацикливание: если бот шлёт слишком часто — игнорируем
         if not check_bot_rate(msg_from):
-            logging.warning(f"⚠️ Rate-limit для бота {msg_from}, игнорирую")
+            logging.warning(f"⚠️ Rate-limit бот {msg_from}, игнор")
             return
-
-        # Если чат замучен — удаляем сообщения от бота тоже (обход конкурентов закрыт)
+        # Если чат замучен — удаляем от ботов тоже
         if t in mutes and mutes[t] > datetime.now():
             logging.info(f"🔇 Мут: удаляю сообщение от бота {msg_from}")
             await delete_silent(t, message.message_id, conn_id)
-            return
-
-        # Дублируем сообщение бота от нашего имени (для antimute сценария)
-        # но только если antimute включён и это бот-обходчик
-        if nonmute_active.get(t) and text:
-            try:
-                await bot.send_message(
-                    t, text,
-                    business_connection_id=conn_id,
-                    parse_mode=None,
-                )
-                logging.info(f"🛡 AntiMute: продублировал сообщение от бота {msg_from}")
-            except Exception as e:
-                logging.error(f"nonmute dup from bot: {e}")
         return
 
     # === КЭШ ===
@@ -662,40 +678,41 @@ async def b_default(message: types.Message):
         oldest = sorted(message_cache[t].keys())[0]
         message_cache[t].pop(oldest, None)
 
-    # === МУТ ===
+    # === МУТ: удаляем сообщения собеседника ===
     if t in mutes:
         if mutes[t] > datetime.now():
             if msg_from != owner_id:
-                logging.info(f"🔇 Мут активен, удаляю {message.message_id}")
-                ok = await delete_silent(t, message.message_id, conn_id)
-                logging.info(f"🔇 Удаление: {'OK' if ok else 'FAIL'}")
-
-                # АНТИМУТ: если у собеседника включён обход —
-                # его бот всё равно доставит. Мы на своей стороне дублируем
-                # если твой antimute активен.
+                logging.info(f"🔇 Мут: удаляю {message.message_id}")
+                await delete_silent(t, message.message_id, conn_id)
             return
         else:
-            mutes.pop(t, None)
-            warns.pop(t, None)
+            mutes.pop(t, None); warns.pop(t, None)
             await delete_warn_msg(t)
 
-    # === АНТИМУТ: дублируем ТВОИ сообщения если чужой мут их удаляет ===
-    # Если это твоё сообщение (не команда) и antimute включён —
-    # отправляем копию от имени бота через send_message (с business_connection).
-    # Копия пойдёт с подписью бота — но её чужой мут не удалит
-    # (пока у противника не включён Bot-to-Bot).
+    # === NONMUTE: дублируем ТВОИ сообщения с невидимыми символами ===
+    # Только если это ТВОЁ сообщение (не от бота) и nonmute включён.
+    # Отправляем 2 копии: обычную + искажённую.
     if (not is_bot and msg_from == owner_id and text and not text.startswith(".")
             and nonmute_active.get(t)):
-        # Небольшая задержка, чтобы чужой мут успел удалить оригинал
-        await asyncio.sleep(0.3)
+        # Задержка, чтобы чужой мут успел удалить оригинал
+        await asyncio.sleep(0.4)
+
+        # Копия 1 — обычный текст (на случай, если у мута нет сравнения по тексту)
         try:
-            await bot.send_message(
-                t, text,
-                business_connection_id=conn_id,
-            )
-            logging.info(f"🛡 AntiMute: продублировал моё сообщение в chat={t}")
+            await bot.send_message(t, text, business_connection_id=conn_id)
+            logging.info(f"🛡 NonMute копия 1 (оригинал) в chat={t}")
         except Exception as e:
-            logging.error(f"nonmute dup: {e}")
+            logging.error(f"nonmute copy1: {e}")
+
+        await asyncio.sleep(0.2)
+
+        # Копия 2 — с невидимыми символами (обход сравнения текста)
+        try:
+            distorted = distort(text, level=1)
+            await bot.send_message(t, distorted, business_connection_id=conn_id)
+            logging.info(f"🛡 NonMute копия 2 (distorted) в chat={t}")
+        except Exception as e:
+            logging.error(f"nonmute copy2: {e}")
 
     # === КЛОН ===
     if clone.get(t) and text and msg_from != owner_id and not text.startswith("."):
@@ -720,12 +737,11 @@ async def b_edited(message: types.Message):
     if conn_id:
         last_conn_by_chat[t] = conn_id
 
-    # Команда от владельца
     if msg_from == owner_id and text.startswith("."):
         await handle_business_command(message, text)
         return
 
-    # Мут — удаляем отредактированные сообщения (в т.ч. от ботов)
+    # Мут — удаляем отредактированное
     if t in mutes and mutes[t] > datetime.now():
         if msg_from != owner_id:
             logging.info(f"🔇 Мут (edited): удаляю {message.message_id}")
