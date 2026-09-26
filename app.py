@@ -176,13 +176,11 @@ def distort(text: str, level: int = 1) -> str:
     if not text:
         return text
     if level == 1:
-        # ZWSP между каждым словом
         words = text.split(" ")
         if len(words) > 1:
             return ZWSP.join(words)
         return text + ZWSP
     elif level == 2:
-        # Начало + середина + конец
         if len(text) < 3:
             return ZWNJ + text + ZWSP
         mid = len(text) // 2
@@ -522,7 +520,7 @@ async def handle_business_command(message: types.Message, text: str):
         await send_confirm(t, "🔊 <b>Мут снят</b>" if was else "ℹ️ <b>Мут не активен</b>", conn_id)
         return
 
-    # .warn N — ЧЕРЕЗ ПРЯМОЙ API
+    # .warn N
     if text.startswith(".warn"):
         try: n = int(parts[1]) if len(parts) > 1 else 1
         except ValueError: n = 1
@@ -539,7 +537,6 @@ async def handle_business_command(message: types.Message, text: str):
         else:
             text_warn = f"⚠️ <b>Предупреждений: {warns[t]}/{WARN_LIMIT}</b>"
 
-        # Прямой вызов sendMessage через API
         result = await bot_api("sendMessage", {
             "chat_id": t,
             "text": text_warn,
@@ -627,7 +624,7 @@ async def handle_business_command(message: types.Message, text: str):
         await send_confirm(
             t,
             f"🛡 <b>Обход чужого мута: {'ВКЛ' if state else 'ВЫКЛ'}</b>\n\n"
-            f"<i>Дубли отправляются мгновенно через bot_api (без business_connection).</i>",
+            f"<i>Дубли отправляются через bot_api без business_connection — чужой мут их не видит.</i>",
             conn_id
         )
         return
@@ -653,28 +650,14 @@ async def b_default(message: types.Message):
     if message.from_user and message.from_user.username:
         username_cache[message.from_user.username.lower()] = msg_from
 
-    # === КОМАНДА ОТ ВЛАДЕЛЬЦА ===
-    if msg_from == owner_id and text.startswith("."):
-        await handle_business_command(message, text)
-        return
-
-    # === СООБЩЕНИЕ ОТ БОТА ===
-    if is_bot and msg_from != bot.id:
-        if not check_bot_rate(msg_from):
-            logging.warning(f"⚠️ Rate-limit бот {msg_from}, игнор")
-            return
-        # Если чат замучен — удаляем от ботов тоже
-        if t in mutes and mutes[t] > datetime.now():
-            logging.info(f"🔇 Мут: удаляю сообщение от бота {msg_from}")
-            await delete_silent(t, message.message_id, conn_id)
-        return
-
-    # === NONMUTE: дублируем МГНОВЕННО, до всего остального ===
+    # ============================================================
+    # 🔥 NONMUTE — ПЕРВЫМ ДЕЛОМ, МГНОВЕННО
+    # Отправляем дубль ДО того, как чужой мут удалит оригинал.
+    # Без business_connection_id — чтобы чужой бот его не видел.
+    # ============================================================
     if (not is_bot and msg_from == owner_id and text and not text.startswith(".")
             and nonmute_active.get(t)):
         try:
-            # Дубль через прямой API БЕЗ business_connection_id
-            # — значит, чужой бот не увидит его как бизнес-сообщение
             distorted = distort(text, level=1)
             result = await bot_api("sendMessage", {
                 "chat_id": t,
@@ -683,9 +666,24 @@ async def b_default(message: types.Message):
             if result and result.get("ok"):
                 logging.info(f"🛡 NonMute: дубль отправлен (chat={t})")
             else:
-                logging.error(f"❌ NonMute: не удалось отправить дубль: {result}")
+                logging.error(f"❌ NonMute: не удалось: {result}")
         except Exception as e:
             logging.error(f"nonmute: {e}")
+
+    # === КОМАНДА ОТ ВЛАДЕЛЬЦА ===
+    if msg_from == owner_id and text.startswith("."):
+        await handle_business_command(message, text)
+        return
+
+    # === СООБЩЕНИЕ ОТ БОТА ===
+    if is_bot and msg_from != bot.id:
+        if not check_bot_rate(msg_from):
+            logging.warning(f"⚠️ Rate-limit бот {msg_from}")
+            return
+        if t in mutes and mutes[t] > datetime.now():
+            logging.info(f"🔇 Мут: удаляю от бота {msg_from}")
+            await delete_silent(t, message.message_id, conn_id)
+        return
 
     # === КЭШ ===
     if t not in message_cache:
@@ -699,7 +697,7 @@ async def b_default(message: types.Message):
         oldest = sorted(message_cache[t].keys())[0]
         message_cache[t].pop(oldest, None)
 
-    # === МУТ: удаляем сообщения собеседника ===
+    # === МУТ ===
     if t in mutes:
         if mutes[t] > datetime.now():
             if msg_from != owner_id:
