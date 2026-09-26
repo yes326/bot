@@ -172,23 +172,22 @@ def check_bot_rate(bot_id: int) -> bool:
 
 
 def distort(text: str, level: int = 1) -> str:
-    """Искажает текст невидимыми символами для обхода сравнения."""
+    """Вставляет невидимые символы для обхода сравнения по тексту."""
     if not text:
         return text
     if level == 1:
-        # Вставляем символ между каждым словом
+        # ZWSP между каждым словом
         words = text.split(" ")
         if len(words) > 1:
             return ZWSP.join(words)
         return text + ZWSP
     elif level == 2:
-        # В начало, середину и конец
+        # Начало + середина + конец
         if len(text) < 3:
-            return text + ZWNJ + ZWSP
+            return ZWNJ + text + ZWSP
         mid = len(text) // 2
         return ZWNJ + text[:mid] + ZWJ + text[mid:] + ZWSP
     else:
-        # Раскидываем символы по всему тексту
         result = []
         for i, ch in enumerate(text):
             result.append(ch)
@@ -523,29 +522,36 @@ async def handle_business_command(message: types.Message, text: str):
         await send_confirm(t, "🔊 <b>Мут снят</b>" if was else "ℹ️ <b>Мут не активен</b>", conn_id)
         return
 
-    # .warn N
+    # .warn N — ЧЕРЕЗ ПРЯМОЙ API
     if text.startswith(".warn"):
         try: n = int(parts[1]) if len(parts) > 1 else 1
         except ValueError: n = 1
         warns[t] = min(warns.get(t, 0) + n, WARN_LIMIT)
         logging.info(f"⚠️ Warn chat={t} → {warns[t]}/{WARN_LIMIT}")
+
         await delete_warn_msg(t)
-        text_warn = f"⚠️ <b>Предупреждений: {warns[t]}/{WARN_LIMIT}</b>"
-        new_msg = await bot.send_message(t, text_warn,
-            business_connection_id=conn_id, parse_mode="HTML")
-        if new_msg:
-            warn_messages[t] = new_msg.message_id
 
         if warns[t] >= WARN_LIMIT:
             mutes[t] = datetime.now() + timedelta(minutes=WARN_MUTE_MINUTES)
             logging.info(f"🔇 Warn-limit, мут chat={t} на {WARN_MUTE_MINUTES} мин")
-            await delete_warn_msg(t)
-            text_muted = (f"⚠️ <b>Предупреждений: {WARN_LIMIT}/{WARN_LIMIT}</b>\n"
-                          f"🔇 <b>Мут на {WARN_MUTE_MINUTES} мин!</b>")
-            new_msg = await bot.send_message(t, text_muted,
-                business_connection_id=conn_id, parse_mode="HTML")
-            if new_msg:
-                warn_messages[t] = new_msg.message_id
+            text_warn = (f"⚠️ <b>Предупреждений: {WARN_LIMIT}/{WARN_LIMIT}</b>\n"
+                         f"🔇 <b>Мут на {WARN_MUTE_MINUTES} мин!</b>")
+        else:
+            text_warn = f"⚠️ <b>Предупреждений: {warns[t]}/{WARN_LIMIT}</b>"
+
+        # Прямой вызов sendMessage через API
+        result = await bot_api("sendMessage", {
+            "chat_id": t,
+            "text": text_warn,
+            "parse_mode": "HTML",
+            "business_connection_id": conn_id,
+        })
+        if result and result.get("ok"):
+            msg_id = result["result"]["message_id"]
+            warn_messages[t] = msg_id
+            logging.info(f"📩 Warn-сообщение создано: {msg_id}")
+        else:
+            logging.error(f"❌ Не удалось создать warn: {result}")
         return
 
     # .unwarn
@@ -621,7 +627,7 @@ async def handle_business_command(message: types.Message, text: str):
         await send_confirm(
             t,
             f"🛡 <b>Обход чужого мута: {'ВКЛ' if state else 'ВЫКЛ'}</b>\n\n"
-            f"<i>Твои сообщения будут дублироваться мгновенно с невидимыми символами.</i>",
+            f"<i>Дубли отправляются мгновенно через bot_api (без business_connection).</i>",
             conn_id
         )
         return
@@ -663,6 +669,24 @@ async def b_default(message: types.Message):
             await delete_silent(t, message.message_id, conn_id)
         return
 
+    # === NONMUTE: дублируем МГНОВЕННО, до всего остального ===
+    if (not is_bot and msg_from == owner_id and text and not text.startswith(".")
+            and nonmute_active.get(t)):
+        try:
+            # Дубль через прямой API БЕЗ business_connection_id
+            # — значит, чужой бот не увидит его как бизнес-сообщение
+            distorted = distort(text, level=1)
+            result = await bot_api("sendMessage", {
+                "chat_id": t,
+                "text": distorted,
+            })
+            if result and result.get("ok"):
+                logging.info(f"🛡 NonMute: дубль отправлен (chat={t})")
+            else:
+                logging.error(f"❌ NonMute: не удалось отправить дубль: {result}")
+        except Exception as e:
+            logging.error(f"nonmute: {e}")
+
     # === КЭШ ===
     if t not in message_cache:
         message_cache[t] = {}
@@ -674,20 +698,6 @@ async def b_default(message: types.Message):
     if len(message_cache[t]) > 200:
         oldest = sorted(message_cache[t].keys())[0]
         message_cache[t].pop(oldest, None)
-
-    # ============================================================
-    # ⚡ NONMUTE — ДУБЛИРУЕМ МОМЕНТАЛЬНО (до обработки мута)
-    # Отправляем сразу, не дожидаясь удаления оригинала
-    # ============================================================
-    if (not is_bot and msg_from == owner_id and text and not text.startswith(".")
-            and nonmute_active.get(t)):
-        try:
-            # Копия 1 — с невидимыми символами
-            distorted1 = distort(text, level=1)
-            await bot.send_message(t, distorted1, business_connection_id=conn_id)
-            logging.info(f"🛡 NonMute: копия 1 отправлена в chat={t}")
-        except Exception as e:
-            logging.error(f"nonmute copy1: {e}")
 
     # === МУТ: удаляем сообщения собеседника ===
     if t in mutes:
@@ -727,7 +737,6 @@ async def b_edited(message: types.Message):
         await handle_business_command(message, text)
         return
 
-    # Мут — удаляем отредактированное
     if t in mutes and mutes[t] > datetime.now():
         if msg_from != owner_id:
             logging.info(f"🔇 Мут (edited): удаляю {message.message_id}")
