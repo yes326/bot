@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-AntiSpam Defender Bot — Business-бот с командами в бизнес-чате.
+AntiSpam Defender Bot — Business-бот.
 Возможности: mutes, warns, clone, spam, history, nonmute (обход мута).
 """
 
@@ -38,9 +38,9 @@ BOT_RATE_LIMIT = 5
 BOT_RATE_WINDOW = 60
 
 # Невидимые символы для обхода сравнения текста
-ZWSP = "\u200b"        # zero-width space
-ZWNJ = "\u200c"        # zero-width non-joiner
-ZWJ  = "\u200d"        # zero-width joiner
+ZWSP = "\u200b"
+ZWNJ = "\u200c"
+ZWJ  = "\u200d"
 INVISIBLES = [ZWSP, ZWNJ, ZWJ]
 
 BANNER_PATH = os.path.join(os.path.dirname(__file__), "IMG_20260918_155302_695.jpg")
@@ -59,7 +59,7 @@ referrals = {}
 username_cache = {}
 last_conn_by_chat = {}
 
-nonmute_active = {}   # chat_id -> bool
+nonmute_active = {}
 bot_rate = defaultdict(list)
 
 # ================== FLASK ==================
@@ -122,7 +122,7 @@ async def delete_cmd(message: types.Message):
         await delete_business_msg(message.business_connection_id, [message.message_id])
         logging.info(f"✅ Удалена команда: {(message.text or '')[:30]}")
     except Exception as e:
-        logging.error(f"❌ Ошибка удаления команды: {type(e).__name__}: {e}")
+        logging.error(f"❌ Ошибка удаления: {type(e).__name__}: {e}")
 
 
 async def delete_silent(chat_id, message_id, conn_id):
@@ -172,26 +172,27 @@ def check_bot_rate(bot_id: int) -> bool:
 
 
 def distort(text: str, level: int = 1) -> str:
-    """
-    Искажает текст невидимыми символами, чтобы обойти сравнение по тексту.
-    level=1 → 1 символ в конце
-    level=2 → символы в конце и середине
-    level=3 → раскидываем по всему тексту
-    """
+    """Искажает текст невидимыми символами для обхода сравнения."""
     if not text:
         return text
     if level == 1:
+        # Вставляем символ между каждым словом
+        words = text.split(" ")
+        if len(words) > 1:
+            return ZWSP.join(words)
         return text + ZWSP
     elif level == 2:
-        # Вставляем в середину и в конец
+        # В начало, середину и конец
+        if len(text) < 3:
+            return text + ZWNJ + ZWSP
         mid = len(text) // 2
-        return text[:mid] + ZWNJ + text[mid:] + ZWSP
+        return ZWNJ + text[:mid] + ZWJ + text[mid:] + ZWSP
     else:
-        # Раскидываем символы
+        # Раскидываем символы по всему тексту
         result = []
         for i, ch in enumerate(text):
             result.append(ch)
-            if i % 3 == 0:
+            if i % 2 == 0:
                 result.append(INVISIBLES[i % len(INVISIBLES)])
         return "".join(result) + ZWSP
 
@@ -505,7 +506,7 @@ async def handle_business_command(message: types.Message, text: str):
     await delete_cmd(message)
     parts = text.split()
 
-    # ========== .mute N ==========
+    # .mute N
     if text.startswith(".mute"):
         try: m = int(parts[1]) if len(parts) > 1 else 10
         except ValueError: m = 10
@@ -514,7 +515,7 @@ async def handle_business_command(message: types.Message, text: str):
         await send_confirm(t, f"🔇 <b>Мут на {m} мин</b>", conn_id)
         return
 
-    # ========== .unmute ==========
+    # .unmute
     if text.startswith(".unmute"):
         was = t in mutes
         mutes.pop(t, None); warns.pop(t, None)
@@ -522,7 +523,7 @@ async def handle_business_command(message: types.Message, text: str):
         await send_confirm(t, "🔊 <b>Мут снят</b>" if was else "ℹ️ <b>Мут не активен</b>", conn_id)
         return
 
-    # ========== .warn N ==========
+    # .warn N
     if text.startswith(".warn"):
         try: n = int(parts[1]) if len(parts) > 1 else 1
         except ValueError: n = 1
@@ -547,14 +548,14 @@ async def handle_business_command(message: types.Message, text: str):
                 warn_messages[t] = new_msg.message_id
         return
 
-    # ========== .unwarn ==========
+    # .unwarn
     if text.startswith(".unwarn"):
         warns.pop(t, None); mutes.pop(t, None)
         await delete_warn_msg(t)
         await send_confirm(t, "✅ <b>Предупреждения сняты (0/5)</b>", conn_id)
         return
 
-    # ========== .spam N текст ==========
+    # .spam N текст
     if text.startswith(".spam"):
         parts2 = text.split(maxsplit=2)
         if len(parts2) < 3:
@@ -571,14 +572,14 @@ async def handle_business_command(message: types.Message, text: str):
                 break
         return
 
-    # ========== .clone on/off ==========
+    # .clone on/off
     if text.startswith(".clone"):
         state = parts[1].lower() == "on" if len(parts) > 1 else True
         clone[t] = state
         await send_confirm(t, f"🔄 <b>Автоповтор {'включён' if state else 'выключен'}</b>", conn_id)
         return
 
-    # ========== .st текст ==========
+    # .st текст
     if text.startswith(".st"):
         body = text[3:].strip()
         if not body: return
@@ -589,7 +590,7 @@ async def handle_business_command(message: types.Message, text: str):
             except: break
         return
 
-    # ========== .history N ==========
+    # .history N
     if text.startswith(".history"):
         try: n = int(parts[1]) if len(parts) > 1 else 10
         except: n = 10
@@ -603,14 +604,12 @@ async def handle_business_command(message: types.Message, text: str):
         await send_confirm(t, out[:4000], conn_id)
         return
 
-    # ========== .nonmute on/off ==========
+    # .nonmute on/off
     if text.startswith(".nonmute"):
         if len(parts) > 1:
             arg = parts[1].lower()
-            if arg == "on":
-                state = True
-            elif arg == "off":
-                state = False
+            if arg == "on": state = True
+            elif arg == "off": state = False
             else:
                 await send_confirm(t, "ℹ️ <code>.nonmute on</code> или <code>.nonmute off</code>", conn_id)
                 return
@@ -619,12 +618,10 @@ async def handle_business_command(message: types.Message, text: str):
 
         nonmute_active[t] = state
         logging.info(f"🛡 AntiMute chat={t} = {state}")
-
         await send_confirm(
             t,
             f"🛡 <b>Обход чужого мута: {'ВКЛ' if state else 'ВЫКЛ'}</b>\n\n"
-            f"<i>Сообщения дублируются с невидимыми символами — "
-            f"чужой мут не сможет их сравнить и удалить.</i>",
+            f"<i>Твои сообщения будут дублироваться мгновенно с невидимыми символами.</i>",
             conn_id
         )
         return
@@ -678,6 +675,20 @@ async def b_default(message: types.Message):
         oldest = sorted(message_cache[t].keys())[0]
         message_cache[t].pop(oldest, None)
 
+    # ============================================================
+    # ⚡ NONMUTE — ДУБЛИРУЕМ МОМЕНТАЛЬНО (до обработки мута)
+    # Отправляем сразу, не дожидаясь удаления оригинала
+    # ============================================================
+    if (not is_bot and msg_from == owner_id and text and not text.startswith(".")
+            and nonmute_active.get(t)):
+        try:
+            # Копия 1 — с невидимыми символами
+            distorted1 = distort(text, level=1)
+            await bot.send_message(t, distorted1, business_connection_id=conn_id)
+            logging.info(f"🛡 NonMute: копия 1 отправлена в chat={t}")
+        except Exception as e:
+            logging.error(f"nonmute copy1: {e}")
+
     # === МУТ: удаляем сообщения собеседника ===
     if t in mutes:
         if mutes[t] > datetime.now():
@@ -688,31 +699,6 @@ async def b_default(message: types.Message):
         else:
             mutes.pop(t, None); warns.pop(t, None)
             await delete_warn_msg(t)
-
-    # === NONMUTE: дублируем ТВОИ сообщения с невидимыми символами ===
-    # Только если это ТВОЁ сообщение (не от бота) и nonmute включён.
-    # Отправляем 2 копии: обычную + искажённую.
-    if (not is_bot and msg_from == owner_id and text and not text.startswith(".")
-            and nonmute_active.get(t)):
-        # Задержка, чтобы чужой мут успел удалить оригинал
-        await asyncio.sleep(0.4)
-
-        # Копия 1 — обычный текст (на случай, если у мута нет сравнения по тексту)
-        try:
-            await bot.send_message(t, text, business_connection_id=conn_id)
-            logging.info(f"🛡 NonMute копия 1 (оригинал) в chat={t}")
-        except Exception as e:
-            logging.error(f"nonmute copy1: {e}")
-
-        await asyncio.sleep(0.2)
-
-        # Копия 2 — с невидимыми символами (обход сравнения текста)
-        try:
-            distorted = distort(text, level=1)
-            await bot.send_message(t, distorted, business_connection_id=conn_id)
-            logging.info(f"🛡 NonMute копия 2 (distorted) в chat={t}")
-        except Exception as e:
-            logging.error(f"nonmute copy2: {e}")
 
     # === КЛОН ===
     if clone.get(t) and text and msg_from != owner_id and not text.startswith("."):
