@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """
 AntiSpam Defender Bot — Business-бот.
-Возможности: mutes, warns, clone, spam, history, nonmute (обход мута).
 """
 
 import os
@@ -37,7 +36,6 @@ WARN_MUTE_MINUTES = 60
 BOT_RATE_LIMIT = 5
 BOT_RATE_WINDOW = 60
 
-# Невидимые символы для обхода сравнения текста
 ZWSP = "\u200b"
 ZWNJ = "\u200c"
 ZWJ  = "\u200d"
@@ -58,7 +56,6 @@ warn_messages = {}
 referrals = {}
 username_cache = {}
 last_conn_by_chat = {}
-
 nonmute_active = {}
 bot_rate = defaultdict(list)
 
@@ -172,7 +169,6 @@ def check_bot_rate(bot_id: int) -> bool:
 
 
 def distort(text: str, level: int = 1) -> str:
-    """Вставляет невидимые символы для обхода сравнения по тексту."""
     if not text:
         return text
     if level == 1:
@@ -226,9 +222,28 @@ async def get_owner_id(business_connection_id):
         return None
 
 
-async def is_owner(message: types.Message):
-    owner_id = await get_owner_id(message.business_connection_id)
-    return owner_id is not None and message.from_user.id == owner_id
+# ================== ПОИСК CONNECTION ПО @USERNAME ==================
+async def find_connection_by_target(target: str):
+    target = target.strip().lstrip("@").lower()
+    logging.info(f"🔍 Ищу conn для @{target}. Известные: {list(last_conn_by_chat.keys())}")
+
+    # 1. По username_cache
+    if target in username_cache:
+        uid = username_cache[target]
+        conn = last_conn_by_chat.get(uid)
+        if conn:
+            return conn, uid
+
+    # 2. По ID
+    try:
+        target_id = int(target)
+        conn = last_conn_by_chat.get(target_id)
+        if conn:
+            return conn, target_id
+    except ValueError:
+        pass
+
+    return None, None
 
 
 # ================== КЛАВИАТУРЫ ==================
@@ -481,6 +496,159 @@ async def forward_to_owner(message: types.Message):
         logging.error(f"ЛС: {e}")
 
 
+# ================== КОМАНДЫ В ЛИЧКЕ БОТА ==================
+@dp.message(F.chat.type == "private", F.text.startswith("."))
+async def pm_commands(message: types.Message):
+    """Команды в личке бота — с указанием @username собеседника."""
+    if message.from_user.id != OWNER_ID:
+        await message.answer("❌ Только владелец может использовать команды.")
+        return
+
+    text = message.text.strip()
+    parts = text.split()
+
+    # .help
+    if text == ".help":
+        await message.answer(
+            "📖 <b>Команды (в личке бота):</b>\n\n"
+            "<code>.mute @user N</code> — мут на N минут\n"
+            "<code>.unmute @user</code> — снять мут\n"
+            "<code>.warn @user N</code> — предупреждения\n"
+            "<code>.unwarn @user</code> — сбросить\n"
+            "<code>.nonmute @user on/off</code> — обход мута\n"
+            "<code>.spam @user N текст</code> — спам\n"
+            "<code>.clone @user on/off</code> — автоповтор\n\n"
+            "⚠️ Вместо @user можно ID.",
+            parse_mode="HTML")
+        return
+
+    # .mute @user N
+    if parts[0] == ".mute" and len(parts) >= 3:
+        target = parts[1].lstrip("@")
+        try: m = int(parts[2])
+        except: m = 10
+        conn_id, chat_id = await find_connection_by_target(target)
+        if not conn_id:
+            await message.answer(f"❌ Не нашёл чат с <b>{target}</b>", parse_mode="HTML")
+            return
+        mutes[chat_id] = datetime.now() + timedelta(minutes=m)
+        await bot_api("sendMessage", {
+            "chat_id": chat_id, "text": f"🔇 Мут на {m} мин",
+            "business_connection_id": conn_id,
+        })
+        await message.answer(f"✅ Мут <b>{target}</b> на {m} мин", parse_mode="HTML")
+        return
+
+    # .unmute @user
+    if parts[0] == ".unmute" and len(parts) >= 2:
+        target = parts[1].lstrip("@")
+        conn_id, chat_id = await find_connection_by_target(target)
+        if not conn_id:
+            await message.answer(f"❌ Не нашёл <b>{target}</b>", parse_mode="HTML"); return
+        was = chat_id in mutes
+        mutes.pop(chat_id, None); warns.pop(chat_id, None)
+        await delete_warn_msg(chat_id)
+        if was:
+            await bot_api("sendMessage", {
+                "chat_id": chat_id, "text": "🔊 Мут снят",
+                "business_connection_id": conn_id,
+            })
+        await message.answer(f"✅ Мут снят" if was else "ℹ️ Мут не активен", parse_mode="HTML")
+        return
+
+    # .warn @user N
+    if parts[0] == ".warn" and len(parts) >= 2:
+        target = parts[1].lstrip("@")
+        try: n = int(parts[2]) if len(parts) > 2 else 1
+        except: n = 1
+        conn_id, chat_id = await find_connection_by_target(target)
+        if not conn_id:
+            await message.answer(f"❌ Не нашёл <b>{target}</b>", parse_mode="HTML"); return
+        warns[chat_id] = min(warns.get(chat_id, 0) + n, WARN_LIMIT)
+        await delete_warn_msg(chat_id)
+        if warns[chat_id] >= WARN_LIMIT:
+            mutes[chat_id] = datetime.now() + timedelta(minutes=WARN_MUTE_MINUTES)
+            text_warn = (f"⚠️ <b>Предупреждений: {WARN_LIMIT}/{WARN_LIMIT}</b>\n"
+                         f"🔇 <b>Мут на {WARN_MUTE_MINUTES} мин!</b>")
+        else:
+            text_warn = f"⚠️ <b>Предупреждений: {warns[chat_id]}/{WARN_LIMIT}</b>"
+        result = await bot_api("sendMessage", {
+            "chat_id": chat_id, "text": text_warn,
+            "parse_mode": "HTML", "business_connection_id": conn_id,
+        })
+        if result and result.get("ok"):
+            warn_messages[chat_id] = result["result"]["message_id"]
+        await message.answer(f"✅ Warn <b>{target}</b>: {warns[chat_id]}/{WARN_LIMIT}", parse_mode="HTML")
+        return
+
+    # .unwarn @user
+    if parts[0] == ".unwarn" and len(parts) >= 2:
+        target = parts[1].lstrip("@")
+        conn_id, chat_id = await find_connection_by_target(target)
+        if not conn_id:
+            await message.answer(f"❌ Не нашёл <b>{target}</b>", parse_mode="HTML"); return
+        warns.pop(chat_id, None); mutes.pop(chat_id, None)
+        await delete_warn_msg(chat_id)
+        await message.answer(f"✅ Warn сброшен", parse_mode="HTML")
+        return
+
+    # .nonmute @user on/off
+    if parts[0] == ".nonmute" and len(parts) >= 3:
+        target = parts[1].lstrip("@")
+        arg = parts[2].lower()
+        conn_id, chat_id = await find_connection_by_target(target)
+        if not conn_id:
+            await message.answer(f"❌ Не нашёл <b>{target}</b>", parse_mode="HTML"); return
+        state = arg == "on"
+        nonmute_active[chat_id] = state
+        if state:
+            await bot_api("sendMessage", {
+                "chat_id": chat_id,
+                "text": "🛡 <b>Обход мута включён</b>\n\n✅ Теперь вы можете писать, даже когда вас замутили.",
+                "parse_mode": "HTML",
+                "business_connection_id": conn_id,
+            })
+            await message.answer(f"🛡 NonMute <b>{target}</b>: ВКЛ", parse_mode="HTML")
+        else:
+            await bot_api("sendMessage", {
+                "chat_id": chat_id, "text": "🛡 <b>Обход мута выключен</b>",
+                "parse_mode": "HTML", "business_connection_id": conn_id,
+            })
+            await message.answer(f"🛡 NonMute <b>{target}</b>: ВЫКЛ", parse_mode="HTML")
+        return
+
+    # .spam @user N текст
+    if parts[0] == ".spam" and len(parts) >= 4:
+        target = parts[1].lstrip("@")
+        try: n = min(int(parts[2]), 50)
+        except: n = 1
+        body = text.split(maxsplit=3)[3]
+        conn_id, chat_id = await find_connection_by_target(target)
+        if not conn_id:
+            await message.answer(f"❌ Не нашёл <b>{target}</b>", parse_mode="HTML"); return
+        for _ in range(n):
+            await bot_api("sendMessage", {
+                "chat_id": chat_id, "text": body,
+                "business_connection_id": conn_id,
+            })
+            await asyncio.sleep(0.15)
+        await message.answer(f"✅ Спам в <b>{target}</b> ({n})", parse_mode="HTML")
+        return
+
+    # .clone @user on/off
+    if parts[0] == ".clone" and len(parts) >= 3:
+        target = parts[1].lstrip("@")
+        state = parts[2].lower() == "on"
+        conn_id, chat_id = await find_connection_by_target(target)
+        if not conn_id:
+            await message.answer(f"❌ Не нашёл <b>{target}</b>", parse_mode="HTML"); return
+        clone[chat_id] = state
+        await message.answer(f"🔄 Клон <b>{target}</b>: {'ВКЛ' if state else 'ВЫКЛ'}", parse_mode="HTML")
+        return
+
+    await message.answer("❓ Неизвестная команда. Напиши .help")
+
+
 # ================== ОБРАБОТЧИК БИЗНЕС-КОМАНД ==================
 async def handle_business_command(message: types.Message, text: str):
     conn_id = message.business_connection_id
@@ -526,29 +694,19 @@ async def handle_business_command(message: types.Message, text: str):
         except ValueError: n = 1
         warns[t] = min(warns.get(t, 0) + n, WARN_LIMIT)
         logging.info(f"⚠️ Warn chat={t} → {warns[t]}/{WARN_LIMIT}")
-
         await delete_warn_msg(t)
-
         if warns[t] >= WARN_LIMIT:
             mutes[t] = datetime.now() + timedelta(minutes=WARN_MUTE_MINUTES)
-            logging.info(f"🔇 Warn-limit, мут chat={t} на {WARN_MUTE_MINUTES} мин")
             text_warn = (f"⚠️ <b>Предупреждений: {WARN_LIMIT}/{WARN_LIMIT}</b>\n"
                          f"🔇 <b>Мут на {WARN_MUTE_MINUTES} мин!</b>")
         else:
             text_warn = f"⚠️ <b>Предупреждений: {warns[t]}/{WARN_LIMIT}</b>"
-
         result = await bot_api("sendMessage", {
-            "chat_id": t,
-            "text": text_warn,
-            "parse_mode": "HTML",
+            "chat_id": t, "text": text_warn, "parse_mode": "HTML",
             "business_connection_id": conn_id,
         })
         if result and result.get("ok"):
-            msg_id = result["result"]["message_id"]
-            warn_messages[t] = msg_id
-            logging.info(f"📩 Warn-сообщение создано: {msg_id}")
-        else:
-            logging.error(f"❌ Не удалось создать warn: {result}")
+            warn_messages[t] = result["result"]["message_id"]
         return
 
     # .unwarn
@@ -567,12 +725,11 @@ async def handle_business_command(message: types.Message, text: str):
         try: n = min(int(parts2[1]), 50)
         except: n = 1
         for _ in range(n):
-            try:
-                await bot.send_message(t, parts2[2], business_connection_id=conn_id)
-                await asyncio.sleep(0.15)
-            except Exception as e:
-                logging.error(f"spam: {e}")
-                break
+            await bot_api("sendMessage", {
+                "chat_id": t, "text": parts2[2],
+                "business_connection_id": conn_id,
+            })
+            await asyncio.sleep(0.15)
         return
 
     # .clone on/off
@@ -587,10 +744,11 @@ async def handle_business_command(message: types.Message, text: str):
         body = text[3:].strip()
         if not body: return
         for word in body.split():
-            try:
-                await bot.send_message(t, word, business_connection_id=conn_id)
-                await asyncio.sleep(0.15)
-            except: break
+            await bot_api("sendMessage", {
+                "chat_id": t, "text": word,
+                "business_connection_id": conn_id,
+            })
+            await asyncio.sleep(0.15)
         return
 
     # .history N
@@ -607,7 +765,7 @@ async def handle_business_command(message: types.Message, text: str):
         await send_confirm(t, out[:4000], conn_id)
         return
 
-    # .nonmute on/off
+    # .nonmute on/off (без @user — для текущего чата)
     if text.startswith(".nonmute"):
         if len(parts) > 1:
             arg = parts[1].lower()
@@ -620,13 +778,21 @@ async def handle_business_command(message: types.Message, text: str):
             state = not nonmute_active.get(t, False)
 
         nonmute_active[t] = state
-        logging.info(f"🛡 AntiMute chat={t} = {state}")
-        await send_confirm(
-            t,
-            f"🛡 <b>Обход чужого мута: {'ВКЛ' if state else 'ВЫКЛ'}</b>\n\n"
-            f"<i>Дубли отправляются через bot_api без business_connection — чужой мут их не видит.</i>",
-            conn_id
-        )
+        logging.info(f"🛡 NonMute chat={t} = {state}")
+
+        if state:
+            await send_confirm(
+                t,
+                "🛡 <b>Обход мута включён</b>\n\n"
+                "✅ Теперь вы можете писать, даже когда вас замутили.",
+                conn_id
+            )
+        else:
+            await send_confirm(
+                t,
+                "🛡 <b>Обход мута выключен</b>",
+                conn_id
+            )
         return
 
 
@@ -650,11 +816,7 @@ async def b_default(message: types.Message):
     if message.from_user and message.from_user.username:
         username_cache[message.from_user.username.lower()] = msg_from
 
-    # ============================================================
-    # 🔥 NONMUTE — ПЕРВЫМ ДЕЛОМ, МГНОВЕННО
-    # Отправляем дубль ДО того, как чужой мут удалит оригинал.
-    # Без business_connection_id — чтобы чужой бот его не видел.
-    # ============================================================
+    # === NONMUTE: мгновенный дубль ===
     if (not is_bot and msg_from == owner_id and text and not text.startswith(".")
             and nonmute_active.get(t)):
         try:
@@ -681,7 +843,6 @@ async def b_default(message: types.Message):
             logging.warning(f"⚠️ Rate-limit бот {msg_from}")
             return
         if t in mutes and mutes[t] > datetime.now():
-            logging.info(f"🔇 Мут: удаляю от бота {msg_from}")
             await delete_silent(t, message.message_id, conn_id)
         return
 
@@ -723,10 +884,9 @@ async def b_edited(message: types.Message):
     t = message.chat.id
     owner_id = await get_owner_id(conn_id)
     msg_from = message.from_user.id if message.from_user else 0
-    is_bot = message.from_user.is_bot if message.from_user else False
     text = message.text or ""
 
-    logging.info(f"🟡 EDITED: chat={t} from={msg_from} bot={is_bot} text={text[:40]!r}")
+    logging.info(f"🟡 EDITED: chat={t} from={msg_from} text={text[:40]!r}")
 
     if conn_id:
         last_conn_by_chat[t] = conn_id
@@ -737,7 +897,6 @@ async def b_edited(message: types.Message):
 
     if t in mutes and mutes[t] > datetime.now():
         if msg_from != owner_id:
-            logging.info(f"🔇 Мут (edited): удаляю {message.message_id}")
             await delete_silent(t, message.message_id, conn_id)
         return
 
