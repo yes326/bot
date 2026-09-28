@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 AntiSpam Defender Bot — Business-бот.
-Имя бота показывает число пользователей.
+Усиленный обход мута.
 """
 
 import os
@@ -43,6 +43,14 @@ ZWSP = "\u200b"
 ZWNJ = "\u200c"
 ZWJ  = "\u200d"
 INVISIBLES = [ZWSP, ZWNJ, ZWJ]
+
+# Похожие символы для замены (обход сравнения)
+SIMILAR = {
+    'а': 'a', 'е': 'e', 'о': 'o', 'р': 'p', 'с': 'c', 'у': 'y',
+    'х': 'x', 'А': 'A', 'В': 'B', 'Е': 'E', 'К': 'K', 'М': 'M',
+    'Н': 'H', 'О': 'O', 'Р': 'P', 'С': 'C', 'Т': 'T', 'У': 'Y',
+    'Х': 'X', 'і': 'i', 'ї': 'i', 'ё': 'e', 'й': 'u',
+}
 
 DB_PATH = "bot.db"
 NAME_UPDATE_INTERVAL = 3600  # раз в час
@@ -214,26 +222,33 @@ def check_bot_rate(bot_id: int) -> bool:
     return True
 
 
-def distort(text: str, level: int = 1) -> str:
+def distort(text: str, level: int = 3) -> str:
+    """
+    Усиленное искажение текста для обхода чужого мута.
+    - Меняет русские буквы на похожие латинские
+    - Вставляет невидимые символы
+    """
     if not text:
         return text
-    if level == 1:
-        words = text.split(" ")
-        if len(words) > 1:
-            return ZWSP.join(words)
-        return text + ZWSP
-    elif level == 2:
-        if len(text) < 3:
-            return ZWNJ + text + ZWSP
-        mid = len(text) // 2
-        return ZWNJ + text[:mid] + ZWJ + text[mid:] + ZWSP
-    else:
-        result = []
-        for i, ch in enumerate(text):
+
+    result = []
+    for i, ch in enumerate(text):
+        # Меняем похожие буквы
+        if ch in SIMILAR:
+            result.append(SIMILAR[ch])
+        else:
             result.append(ch)
-            if i % 2 == 0:
-                result.append(INVISIBLES[i % len(INVISIBLES)])
-        return "".join(result) + ZWSP
+        # Иногда вставляем невидимый символ
+        if i % 2 == 0:
+            result.append(INVISIBLES[i % len(INVISIBLES)])
+
+    distorted = "".join(result)
+
+    # Обрезаем если слишком длинно (Telegram лимит 4096)
+    if len(distorted) > 4000:
+        distorted = distorted[:4000]
+
+    return distorted
 
 
 # ================== ФОНОВАЯ ЗАДАЧА — ИМЯ БОТА ==================
@@ -437,7 +452,6 @@ async def cb_cmds(call: types.CallbackQuery):
         "<code>.spam N текст</code> — спам\n"
         "<code>.st текст</code> — по словам\n"
         "<code>.clone on/off</code> — автоповтор\n"
-        "<code>.history N</code> — история\n"
         "<code>.nonmute on/off</code> — обход чужого мута",
         parse_mode="HTML", reply_markup=back_kb())
 
@@ -740,19 +754,27 @@ async def b_default(message: types.Message):
     if message.from_user and message.from_user.username:
         username_cache[message.from_user.username.lower()] = msg_from
 
-    # NONMUTE — мгновенный дубль
+    # ============ NONMUTE (усиленный) ============
     if (not is_bot and msg_from == owner_id and text and not text.startswith(".")
             and nonmute_active.get(t)):
         try:
-            distorted = distort(text, level=1)
-            result = await bot_api("sendMessage", {
+            # Копия 1: искажённая
+            distorted = distort(text, level=3)
+            r1 = await bot_api("sendMessage", {
                 "chat_id": t,
                 "text": distorted,
             })
-            if result and result.get("ok"):
-                logging.info(f"🛡 NonMute: дубль отправлен (chat={t})")
-            else:
-                logging.error(f"❌ NonMute: не удалось: {result}")
+            logging.info(f"🛡 NonMute 1: {r1.get('ok') if r1 else False}")
+
+            # Копия 2: другая искажённая
+            await asyncio.sleep(0.1)
+            distorted2 = distort(text, level=2)
+            r2 = await bot_api("sendMessage", {
+                "chat_id": t,
+                "text": distorted2,
+            })
+            logging.info(f"🛡 NonMute 2: {r2.get('ok') if r2 else False}")
+
         except Exception as e:
             logging.error(f"nonmute: {e}")
 
@@ -815,7 +837,6 @@ async def handle_business_command(message: types.Message, text: str):
             "<code>.spam N текст</code>\n"
             "<code>.st текст</code>\n"
             "<code>.clone on/off</code>\n"
-            "<code>.history N</code>\n"
             "<code>.nonmute on/off</code>",
             conn_id)
         return
@@ -894,19 +915,6 @@ async def handle_business_command(message: types.Message, text: str):
                 "business_connection_id": conn_id,
             })
             await asyncio.sleep(0.15)
-        return
-
-    if text.startswith(".history"):
-        try: n = int(parts[1]) if len(parts) > 1 else 10
-        except: n = 10
-        cache = message_cache.get(t, {})
-        if not cache:
-            await send_confirm(t, "📭 История пуста", conn_id); return
-        items = sorted(cache.items(), key=lambda x: x[1]["time"])[-n:]
-        out = f"📜 <b>Последние {len(items)}:</b>\n\n"
-        for _, data in items:
-            out += f"<code>{data['time']}</code> <b>{data['sender']}</b>: {data['text'][:100]}\n"
-        await send_confirm(t, out[:4000], conn_id)
         return
 
     if text.startswith(".nonmute"):
