@@ -2,6 +2,7 @@
 """
 AntiSpam Defender Bot — Business-бот.
 Обход мута через business_connection_id + искажение.
+Управление через .nonmute on/off.
 """
 
 import os
@@ -714,8 +715,9 @@ async def b_default(message):
     if message.from_user and message.from_user.username:
         username_cache[message.from_user.username.lower()] = msg_from
 
-    # ============ NONMUTE — ОДНА копия ============
-    if (not is_bot and text and not text.startswith(".")):
+    # ============ NONMUTE — ТОЛЬКО если включён ============
+    if (not is_bot and text and not text.startswith(".")
+            and nonmute_active.get(t)):
         is_from_owner = (owner_id is not None and msg_from == owner_id)
 
         if is_from_owner:
