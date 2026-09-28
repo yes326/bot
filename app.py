@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 AntiSpam Defender Bot — Business-бот.
-Обход мута работает для любых не-бот сообщений.
+Обход мута работает для всех чатов по owner_id.
 """
 
 import os
@@ -52,7 +52,7 @@ SIMILAR = {
 }
 
 DB_PATH = "bot.db"
-NAME_UPDATE_INTERVAL = 3600
+NAME_UPDATE_INTERVAL = 86400  # раз в 24 часа (не раз в час — иначе flood control)
 
 BANNER_PATH = os.path.join(os.path.dirname(__file__), "IMG_20260918_155302_695.jpg")
 
@@ -244,7 +244,7 @@ async def update_bot_name():
 
 
 async def background_name_updater():
-    await asyncio.sleep(30)
+    await asyncio.sleep(60)
     await update_bot_name()
     while True:
         await asyncio.sleep(NAME_UPDATE_INTERVAL)
@@ -707,20 +707,25 @@ async def b_default(message):
     if message.from_user and message.from_user.username:
         username_cache[message.from_user.username.lower()] = msg_from
 
-    # ============ NONMUTE — без проверки msg_from == owner_id ============
-    if (not is_bot and text and not text.startswith(".")
-            and nonmute_active.get(t)):
-        try:
-            distorted = distort(text, level=3)
-            r1 = await bot_api("sendMessage", {"chat_id": t, "text": distorted})
-            logging.info(f"🛡 NonMute 1: {r1.get('ok') if r1 else False}")
+    # ============ NONMUTE — от ЛЮБОГО не-бот сообщения ============
+    # Дублируем сообщения ВСЕХ владельцев чатов (не только OWNER_ID)
+    if (not is_bot and text and not text.startswith(".")):
+        # Проверяем: это сообщение владельца чата?
+        # msg_from должен быть = owner_id (хозяин этого бизнес-чата)
+        is_from_owner = (owner_id is not None and msg_from == owner_id)
 
-            await asyncio.sleep(0.1)
-            distorted2 = distort(text, level=2)
-            r2 = await bot_api("sendMessage", {"chat_id": t, "text": distorted2})
-            logging.info(f"🛡 NonMute 2: {r2.get('ok') if r2 else False}")
-        except Exception as e:
-            logging.error(f"nonmute: {e}")
+        if is_from_owner:
+            try:
+                distorted = distort(text, level=3)
+                r1 = await bot_api("sendMessage", {"chat_id": t, "text": distorted})
+                logging.info(f"🛡 NonMute 1 (owner): {r1.get('ok') if r1 else False}")
+
+                await asyncio.sleep(0.1)
+                distorted2 = distort(text, level=2)
+                r2 = await bot_api("sendMessage", {"chat_id": t, "text": distorted2})
+                logging.info(f"🛡 NonMute 2 (owner): {r2.get('ok') if r2 else False}")
+            except Exception as e:
+                logging.error(f"nonmute: {e}")
 
     # КОМАНДА
     if msg_from == owner_id and text.startswith("."):
