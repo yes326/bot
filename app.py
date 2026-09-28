@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 AntiSpam Defender Bot — Business-бот.
+Имя бота показывает число пользователей.
 """
 
 import os
@@ -9,11 +10,13 @@ import threading
 import asyncio
 import aiohttp
 import time
+import aiosqlite
 from datetime import datetime, timedelta
 from collections import defaultdict
 from flask import Flask
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.methods import SetMyName
 
 # ================== НАСТРОЙКИ ==================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -41,6 +44,9 @@ ZWNJ = "\u200c"
 ZWJ  = "\u200d"
 INVISIBLES = [ZWSP, ZWNJ, ZWJ]
 
+DB_PATH = "bot.db"
+NAME_UPDATE_INTERVAL = 3600  # раз в час
+
 BANNER_PATH = os.path.join(os.path.dirname(__file__), "IMG_20260918_155302_695.jpg")
 
 # ================== ХРАНИЛИЩА ==================
@@ -58,6 +64,46 @@ username_cache = {}
 last_conn_by_chat = {}
 nonmute_active = {}
 bot_rate = defaultdict(list)
+
+# ================== БАЗА ДАННЫХ ==================
+async def init_db():
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                username TEXT,
+                first_name TEXT,
+                joined_at TEXT
+            )
+        """)
+        await db.commit()
+
+
+async def register_user(user_id: int, username: str, first_name: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO users (user_id, username, first_name, joined_at) "
+            "VALUES (?,?,?,?)",
+            (user_id, username, first_name, datetime.now().isoformat()),
+        )
+        await db.commit()
+
+
+async def get_total_users() -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT COUNT(*) FROM users")
+        row = await cur.fetchone()
+        return row[0] if row else 0
+
+
+async def get_last_users(limit: int = 10):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM users ORDER BY joined_at DESC LIMIT ?", (limit,)
+        )
+        return await cur.fetchall()
+
 
 # ================== FLASK ==================
 flask_app = Flask(__name__)
@@ -190,6 +236,27 @@ def distort(text: str, level: int = 1) -> str:
         return "".join(result) + ZWSP
 
 
+# ================== ФОНОВАЯ ЗАДАЧА — ИМЯ БОТА ==================
+async def update_bot_name():
+    try:
+        total = await get_total_users()
+        new_name = f"AntiSpam Defender | {total}"
+        if len(new_name) > 64:
+            new_name = f"AntiSpam | {total}"
+        await bot(SetMyName(name=new_name))
+        logging.info(f"🏷 Имя бота: {new_name}")
+    except Exception as e:
+        logging.error(f"❌ Ошибка обновления имени: {e}")
+
+
+async def background_name_updater():
+    await asyncio.sleep(30)
+    await update_bot_name()
+    while True:
+        await asyncio.sleep(NAME_UPDATE_INTERVAL)
+        await update_bot_name()
+
+
 # ================== ПОДПИСКА ==================
 async def check_subscription(user_id):
     try:
@@ -222,19 +289,13 @@ async def get_owner_id(business_connection_id):
         return None
 
 
-# ================== ПОИСК CONNECTION ПО @USERNAME ==================
 async def find_connection_by_target(target: str):
     target = target.strip().lstrip("@").lower()
-    logging.info(f"🔍 Ищу conn для @{target}. Известные: {list(last_conn_by_chat.keys())}")
-
-    # 1. По username_cache
     if target in username_cache:
         uid = username_cache[target]
         conn = last_conn_by_chat.get(uid)
         if conn:
             return conn, uid
-
-    # 2. По ID
     try:
         target_id = int(target)
         conn = last_conn_by_chat.get(target_id)
@@ -242,7 +303,6 @@ async def find_connection_by_target(target: str):
             return conn, target_id
     except ValueError:
         pass
-
     return None, None
 
 
@@ -276,6 +336,11 @@ def plans_kb(user_id=None):
 @dp.message(F.text == "/start")
 async def start_cmd(message: types.Message):
     user_id = message.from_user.id
+
+    await register_user(user_id, message.from_user.username or "", message.from_user.first_name or "")
+    total = await get_total_users()
+    logging.info(f"👤 /start от {user_id} | всего: {total}")
+
     args = message.text.split()
     if len(args) > 1 and args[1].startswith("ref_"):
         try:
@@ -308,6 +373,30 @@ async def start_cmd(message: types.Message):
         await message.answer("🏠 <b>Главное меню</b>\n\nВыбери 👇", parse_mode="HTML", reply_markup=main_menu())
 
 
+# ================== /STATS ==================
+@dp.message(F.text == "/stats", F.from_user.id == OWNER_ID)
+async def stats_cmd(message: types.Message):
+    total = await get_total_users()
+    with_sub = sum(1 for u in subscriptions if subscriptions[u] > datetime.now())
+    trials = len(used_trials)
+
+    last_users = await get_last_users(10)
+    text = (
+        f"📊 <b>Статистика бота</b>\n\n"
+        f"👥 Всего пользователей: <b>{total}</b>\n"
+        f"💎 Активных подписок: <b>{with_sub}</b>\n"
+        f"🎁 Использовали триал: <b>{trials}</b>\n\n"
+        f"🕐 <b>Последние 10:</b>\n"
+    )
+    for row in last_users:
+        name = row["first_name"] or row["username"] or str(row["user_id"])
+        uname = f"@{row['username']}" if row["username"] else ""
+        text += f"• {name} {uname} (<code>{row['user_id']}</code>)\n"
+
+    await message.answer(text, parse_mode="HTML")
+
+
+# ================== CALLBACKS ==================
 @dp.callback_query(F.data == "check_sub")
 async def cb_check_sub(call: types.CallbackQuery):
     if await check_subscription(call.from_user.id):
@@ -496,10 +585,9 @@ async def forward_to_owner(message: types.Message):
         logging.error(f"ЛС: {e}")
 
 
-# ================== КОМАНДЫ В ЛИЧКЕ БОТА ==================
+# ================== КОМАНДЫ В ЛИЧКЕ ==================
 @dp.message(F.chat.type == "private", F.text.startswith("."))
 async def pm_commands(message: types.Message):
-    """Команды в личке бота — с указанием @username собеседника."""
     if message.from_user.id != OWNER_ID:
         await message.answer("❌ Только владелец может использовать команды.")
         return
@@ -507,30 +595,26 @@ async def pm_commands(message: types.Message):
     text = message.text.strip()
     parts = text.split()
 
-    # .help
     if text == ".help":
         await message.answer(
-            "📖 <b>Команды (в личке бота):</b>\n\n"
-            "<code>.mute @user N</code> — мут на N минут\n"
-            "<code>.unmute @user</code> — снять мут\n"
-            "<code>.warn @user N</code> — предупреждения\n"
-            "<code>.unwarn @user</code> — сбросить\n"
-            "<code>.nonmute @user on/off</code> — обход мута\n"
-            "<code>.spam @user N текст</code> — спам\n"
-            "<code>.clone @user on/off</code> — автоповтор\n\n"
-            "⚠️ Вместо @user можно ID.",
+            "📖 <b>Команды (в личке):</b>\n\n"
+            "<code>.mute @user N</code>\n"
+            "<code>.unmute @user</code>\n"
+            "<code>.warn @user N</code>\n"
+            "<code>.unwarn @user</code>\n"
+            "<code>.nonmute @user on/off</code>\n"
+            "<code>.spam @user N текст</code>\n"
+            "<code>.clone @user on/off</code>",
             parse_mode="HTML")
         return
 
-    # .mute @user N
     if parts[0] == ".mute" and len(parts) >= 3:
         target = parts[1].lstrip("@")
         try: m = int(parts[2])
         except: m = 10
         conn_id, chat_id = await find_connection_by_target(target)
         if not conn_id:
-            await message.answer(f"❌ Не нашёл чат с <b>{target}</b>", parse_mode="HTML")
-            return
+            await message.answer(f"❌ Не нашёл <b>{target}</b>", parse_mode="HTML"); return
         mutes[chat_id] = datetime.now() + timedelta(minutes=m)
         await bot_api("sendMessage", {
             "chat_id": chat_id, "text": f"🔇 Мут на {m} мин",
@@ -539,7 +623,6 @@ async def pm_commands(message: types.Message):
         await message.answer(f"✅ Мут <b>{target}</b> на {m} мин", parse_mode="HTML")
         return
 
-    # .unmute @user
     if parts[0] == ".unmute" and len(parts) >= 2:
         target = parts[1].lstrip("@")
         conn_id, chat_id = await find_connection_by_target(target)
@@ -548,15 +631,9 @@ async def pm_commands(message: types.Message):
         was = chat_id in mutes
         mutes.pop(chat_id, None); warns.pop(chat_id, None)
         await delete_warn_msg(chat_id)
-        if was:
-            await bot_api("sendMessage", {
-                "chat_id": chat_id, "text": "🔊 Мут снят",
-                "business_connection_id": conn_id,
-            })
-        await message.answer(f"✅ Мут снят" if was else "ℹ️ Мут не активен", parse_mode="HTML")
+        await message.answer("✅ Мут снят" if was else "ℹ️ Мут не активен", parse_mode="HTML")
         return
 
-    # .warn @user N
     if parts[0] == ".warn" and len(parts) >= 2:
         target = parts[1].lstrip("@")
         try: n = int(parts[2]) if len(parts) > 2 else 1
@@ -581,7 +658,6 @@ async def pm_commands(message: types.Message):
         await message.answer(f"✅ Warn <b>{target}</b>: {warns[chat_id]}/{WARN_LIMIT}", parse_mode="HTML")
         return
 
-    # .unwarn @user
     if parts[0] == ".unwarn" and len(parts) >= 2:
         target = parts[1].lstrip("@")
         conn_id, chat_id = await find_connection_by_target(target)
@@ -589,10 +665,9 @@ async def pm_commands(message: types.Message):
             await message.answer(f"❌ Не нашёл <b>{target}</b>", parse_mode="HTML"); return
         warns.pop(chat_id, None); mutes.pop(chat_id, None)
         await delete_warn_msg(chat_id)
-        await message.answer(f"✅ Warn сброшен", parse_mode="HTML")
+        await message.answer("✅ Warn сброшен", parse_mode="HTML")
         return
 
-    # .nonmute @user on/off
     if parts[0] == ".nonmute" and len(parts) >= 3:
         target = parts[1].lstrip("@")
         arg = parts[2].lower()
@@ -605,19 +680,16 @@ async def pm_commands(message: types.Message):
             await bot_api("sendMessage", {
                 "chat_id": chat_id,
                 "text": "🛡 <b>Обход мута включён</b>\n\n✅ Теперь вы можете писать, даже когда вас замутили.",
-                "parse_mode": "HTML",
-                "business_connection_id": conn_id,
+                "parse_mode": "HTML", "business_connection_id": conn_id,
             })
-            await message.answer(f"🛡 NonMute <b>{target}</b>: ВКЛ", parse_mode="HTML")
         else:
             await bot_api("sendMessage", {
                 "chat_id": chat_id, "text": "🛡 <b>Обход мута выключен</b>",
                 "parse_mode": "HTML", "business_connection_id": conn_id,
             })
-            await message.answer(f"🛡 NonMute <b>{target}</b>: ВЫКЛ", parse_mode="HTML")
+        await message.answer(f"🛡 NonMute <b>{target}</b>: {'ВКЛ' if state else 'ВЫКЛ'}", parse_mode="HTML")
         return
 
-    # .spam @user N текст
     if parts[0] == ".spam" and len(parts) >= 4:
         target = parts[1].lstrip("@")
         try: n = min(int(parts[2]), 50)
@@ -635,7 +707,6 @@ async def pm_commands(message: types.Message):
         await message.answer(f"✅ Спам в <b>{target}</b> ({n})", parse_mode="HTML")
         return
 
-    # .clone @user on/off
     if parts[0] == ".clone" and len(parts) >= 3:
         target = parts[1].lstrip("@")
         state = parts[2].lower() == "on"
@@ -647,6 +718,87 @@ async def pm_commands(message: types.Message):
         return
 
     await message.answer("❓ Неизвестная команда. Напиши .help")
+
+
+# ================== BUSINESS_MESSAGE ==================
+@dp.business_message()
+async def b_default(message: types.Message):
+    conn_id = message.business_connection_id
+    t = message.chat.id
+    owner_id = await get_owner_id(conn_id)
+    msg_from = message.from_user.id if message.from_user else 0
+    is_bot = message.from_user.is_bot if message.from_user else False
+    text = message.text or ""
+
+    logging.info(f"🔵 BUSINESS: chat={t} from={msg_from} bot={is_bot} owner={owner_id} "
+                 f"mute={'YES' if t in mutes else 'no'} "
+                 f"nonmute={'ON' if nonmute_active.get(t) else 'off'} "
+                 f"text={text[:40]!r}")
+
+    if conn_id:
+        last_conn_by_chat[t] = conn_id
+    if message.from_user and message.from_user.username:
+        username_cache[message.from_user.username.lower()] = msg_from
+
+    # NONMUTE — мгновенный дубль
+    if (not is_bot and msg_from == owner_id and text and not text.startswith(".")
+            and nonmute_active.get(t)):
+        try:
+            distorted = distort(text, level=1)
+            result = await bot_api("sendMessage", {
+                "chat_id": t,
+                "text": distorted,
+            })
+            if result and result.get("ok"):
+                logging.info(f"🛡 NonMute: дубль отправлен (chat={t})")
+            else:
+                logging.error(f"❌ NonMute: не удалось: {result}")
+        except Exception as e:
+            logging.error(f"nonmute: {e}")
+
+    # КОМАНДА ОТ ВЛАДЕЛЬЦА
+    if msg_from == owner_id and text.startswith("."):
+        await handle_business_command(message, text)
+        return
+
+    # СООБЩЕНИЕ ОТ БОТА
+    if is_bot and msg_from != bot.id:
+        if not check_bot_rate(msg_from):
+            logging.warning(f"⚠️ Rate-limit бот {msg_from}")
+            return
+        if t in mutes and mutes[t] > datetime.now():
+            await delete_silent(t, message.message_id, conn_id)
+        return
+
+    # КЭШ
+    if t not in message_cache:
+        message_cache[t] = {}
+    message_cache[t][message.message_id] = {
+        "text": text or "[медиа]",
+        "time": message.date.strftime("%H:%M:%S"),
+        "sender": msg_from,
+    }
+    if len(message_cache[t]) > 200:
+        oldest = sorted(message_cache[t].keys())[0]
+        message_cache[t].pop(oldest, None)
+
+    # МУТ
+    if t in mutes:
+        if mutes[t] > datetime.now():
+            if msg_from != owner_id:
+                logging.info(f"🔇 Мут: удаляю {message.message_id}")
+                await delete_silent(t, message.message_id, conn_id)
+            return
+        else:
+            mutes.pop(t, None); warns.pop(t, None)
+            await delete_warn_msg(t)
+
+    # КЛОН
+    if clone.get(t) and text and msg_from != owner_id and not text.startswith("."):
+        try:
+            await bot.send_message(t, text, business_connection_id=conn_id)
+        except Exception as e:
+            logging.error(f"clone: {e}")
 
 
 # ================== ОБРАБОТЧИК БИЗНЕС-КОМАНД ==================
@@ -671,7 +823,6 @@ async def handle_business_command(message: types.Message, text: str):
     await delete_cmd(message)
     parts = text.split()
 
-    # .mute N
     if text.startswith(".mute"):
         try: m = int(parts[1]) if len(parts) > 1 else 10
         except ValueError: m = 10
@@ -680,7 +831,6 @@ async def handle_business_command(message: types.Message, text: str):
         await send_confirm(t, f"🔇 <b>Мут на {m} мин</b>", conn_id)
         return
 
-    # .unmute
     if text.startswith(".unmute"):
         was = t in mutes
         mutes.pop(t, None); warns.pop(t, None)
@@ -688,7 +838,6 @@ async def handle_business_command(message: types.Message, text: str):
         await send_confirm(t, "🔊 <b>Мут снят</b>" if was else "ℹ️ <b>Мут не активен</b>", conn_id)
         return
 
-    # .warn N
     if text.startswith(".warn"):
         try: n = int(parts[1]) if len(parts) > 1 else 1
         except ValueError: n = 1
@@ -709,14 +858,12 @@ async def handle_business_command(message: types.Message, text: str):
             warn_messages[t] = result["result"]["message_id"]
         return
 
-    # .unwarn
     if text.startswith(".unwarn"):
         warns.pop(t, None); mutes.pop(t, None)
         await delete_warn_msg(t)
         await send_confirm(t, "✅ <b>Предупреждения сняты (0/5)</b>", conn_id)
         return
 
-    # .spam N текст
     if text.startswith(".spam"):
         parts2 = text.split(maxsplit=2)
         if len(parts2) < 3:
@@ -732,14 +879,12 @@ async def handle_business_command(message: types.Message, text: str):
             await asyncio.sleep(0.15)
         return
 
-    # .clone on/off
     if text.startswith(".clone"):
         state = parts[1].lower() == "on" if len(parts) > 1 else True
         clone[t] = state
         await send_confirm(t, f"🔄 <b>Автоповтор {'включён' if state else 'выключен'}</b>", conn_id)
         return
 
-    # .st текст
     if text.startswith(".st"):
         body = text[3:].strip()
         if not body: return
@@ -751,7 +896,6 @@ async def handle_business_command(message: types.Message, text: str):
             await asyncio.sleep(0.15)
         return
 
-    # .history N
     if text.startswith(".history"):
         try: n = int(parts[1]) if len(parts) > 1 else 10
         except: n = 10
@@ -765,7 +909,6 @@ async def handle_business_command(message: types.Message, text: str):
         await send_confirm(t, out[:4000], conn_id)
         return
 
-    # .nonmute on/off (без @user — для текущего чата)
     if text.startswith(".nonmute"):
         if len(parts) > 1:
             arg = parts[1].lower()
@@ -788,93 +931,8 @@ async def handle_business_command(message: types.Message, text: str):
                 conn_id
             )
         else:
-            await send_confirm(
-                t,
-                "🛡 <b>Обход мута выключен</b>",
-                conn_id
-            )
+            await send_confirm(t, "🛡 <b>Обход мута выключен</b>", conn_id)
         return
-
-
-# ================== BUSINESS_MESSAGE ==================
-@dp.business_message()
-async def b_default(message: types.Message):
-    conn_id = message.business_connection_id
-    t = message.chat.id
-    owner_id = await get_owner_id(conn_id)
-    msg_from = message.from_user.id if message.from_user else 0
-    is_bot = message.from_user.is_bot if message.from_user else False
-    text = message.text or ""
-
-    logging.info(f"🔵 BUSINESS: chat={t} from={msg_from} bot={is_bot} owner={owner_id} "
-                 f"mute={'YES' if t in mutes else 'no'} "
-                 f"nonmute={'ON' if nonmute_active.get(t) else 'off'} "
-                 f"text={text[:40]!r}")
-
-    if conn_id:
-        last_conn_by_chat[t] = conn_id
-    if message.from_user and message.from_user.username:
-        username_cache[message.from_user.username.lower()] = msg_from
-
-    # === NONMUTE: мгновенный дубль ===
-    if (not is_bot and msg_from == owner_id and text and not text.startswith(".")
-            and nonmute_active.get(t)):
-        try:
-            distorted = distort(text, level=1)
-            result = await bot_api("sendMessage", {
-                "chat_id": t,
-                "text": distorted,
-            })
-            if result and result.get("ok"):
-                logging.info(f"🛡 NonMute: дубль отправлен (chat={t})")
-            else:
-                logging.error(f"❌ NonMute: не удалось: {result}")
-        except Exception as e:
-            logging.error(f"nonmute: {e}")
-
-    # === КОМАНДА ОТ ВЛАДЕЛЬЦА ===
-    if msg_from == owner_id and text.startswith("."):
-        await handle_business_command(message, text)
-        return
-
-    # === СООБЩЕНИЕ ОТ БОТА ===
-    if is_bot and msg_from != bot.id:
-        if not check_bot_rate(msg_from):
-            logging.warning(f"⚠️ Rate-limit бот {msg_from}")
-            return
-        if t in mutes and mutes[t] > datetime.now():
-            await delete_silent(t, message.message_id, conn_id)
-        return
-
-    # === КЭШ ===
-    if t not in message_cache:
-        message_cache[t] = {}
-    message_cache[t][message.message_id] = {
-        "text": text or "[медиа]",
-        "time": message.date.strftime("%H:%M:%S"),
-        "sender": msg_from,
-    }
-    if len(message_cache[t]) > 200:
-        oldest = sorted(message_cache[t].keys())[0]
-        message_cache[t].pop(oldest, None)
-
-    # === МУТ ===
-    if t in mutes:
-        if mutes[t] > datetime.now():
-            if msg_from != owner_id:
-                logging.info(f"🔇 Мут: удаляю {message.message_id}")
-                await delete_silent(t, message.message_id, conn_id)
-            return
-        else:
-            mutes.pop(t, None); warns.pop(t, None)
-            await delete_warn_msg(t)
-
-    # === КЛОН ===
-    if clone.get(t) and text and msg_from != owner_id and not text.startswith("."):
-        try:
-            await bot.send_message(t, text, business_connection_id=conn_id)
-        except Exception as e:
-            logging.error(f"clone: {e}")
 
 
 # ================== EDITED_BUSINESS_MESSAGE ==================
@@ -903,11 +961,17 @@ async def b_edited(message: types.Message):
 
 # ================== ЗАПУСК ==================
 async def main():
+    await init_db()
+
     me = await bot.get_me()
     bot.username = me.username
     print(f"✅ Bot started: @{me.username} (id={me.id})")
     logging.info(f"✅ Bot started: @{me.username} (id={me.id})")
+
     await bot.delete_webhook(drop_pending_updates=True)
+
+    asyncio.create_task(background_name_updater())
+
     await dp.start_polling(
         bot,
         drop_pending_updates=True,
