@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 AntiSpam Defender Bot — Business-бот.
+Красивый интерфейс + единый список команд + баннер на всех слайдах.
 """
 
 import os
@@ -65,7 +66,20 @@ SIMILAR = {
 DB_PATH = "bot.db"
 NAME_UPDATE_INTERVAL = 86400
 
-BANNER_PATH = os.path.join(os.path.dirname(__file__), "IMG_20260918_155302_695.jpg")
+# ===== БАННЕР =====
+BANNER_PATH = os.path.join(os.path.dirname(__file__), "angel.jpg")
+# Fallback, если angel.jpg нет
+BANNER_FALLBACK = os.path.join(os.path.dirname(__file__), "IMG_20260918_155302_695.jpg")
+
+
+def get_banner_path():
+    """Возвращает путь к баннеру: angel.jpg если есть, иначе старый."""
+    if os.path.exists(BANNER_PATH):
+        return BANNER_PATH
+    if os.path.exists(BANNER_FALLBACK):
+        return BANNER_FALLBACK
+    return None
+
 
 # ================== ХРАНИЛИЩА ==================
 business_owners = {}
@@ -82,7 +96,7 @@ username_cache = {}
 last_conn_by_chat = {}
 nonmute_active = {}
 bot_rate = defaultdict(list)
-echo_chats = {}  # {chat_id: True/False} — для .echo
+echo_chats = {}
 
 # ================== БАЗА ==================
 async def init_db():
@@ -204,6 +218,41 @@ async def send_confirm(chat_id, text, conn_id, seconds=None):
         return None
 
 
+async def send_photo_banner(chat_id, caption, conn_id=None, reply_markup=None, parse_mode="HTML"):
+    """Отправляет фото-баннер с подписью. Работает и в бизнес-чате, и в ЛС."""
+    path = get_banner_path()
+    if path:
+        try:
+            kwargs = {
+                "chat_id": chat_id,
+                "photo": types.FSInputFile(path),
+                "caption": caption,
+                "parse_mode": parse_mode,
+            }
+            if reply_markup:
+                kwargs["reply_markup"] = reply_markup
+            if conn_id:
+                kwargs["business_connection_id"] = conn_id
+            return await bot.send_photo(**kwargs)
+        except Exception as e:
+            logging.error(f"send_photo_banner: {e}")
+    # Fallback — текстом
+    try:
+        kwargs = {
+            "chat_id": chat_id,
+            "text": caption,
+            "parse_mode": parse_mode,
+        }
+        if reply_markup:
+            kwargs["reply_markup"] = reply_markup
+        if conn_id:
+            kwargs["business_connection_id"] = conn_id
+        return await bot.send_message(**kwargs)
+    except Exception as e:
+        logging.error(f"send_message fallback: {e}")
+        return None
+
+
 async def delete_warn_msg(chat_id):
     old_msg_id = warn_messages.get(chat_id)
     conn_id = last_conn_by_chat.get(chat_id)
@@ -277,7 +326,6 @@ def _safe_eval(node):
 
 
 def calc_expr(expr: str):
-    """Безопасно считает арифметику. Возвращает число или None."""
     try:
         tree = ast.parse(expr, mode="eval")
         result = _safe_eval(tree)
@@ -384,6 +432,65 @@ def plans_kb(user_id=None):
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+# ================== ТЕКСТЫ СЛАЙДОВ (красивые) ==================
+TEXT_MAIN_MENU = (
+    "🏠 <b>Главное меню</b>\n"
+    "━━━━━━━━━━━━━━━━━━━━\n"
+    "🛡 <b>AntiSpam Defender</b> — защита\n"
+    "ваших бизнес-чатов от спама\n"
+    "и нежелательных сообщений.\n"
+    "━━━━━━━━━━━━━━━━━━━━\n"
+    "👇 <i>Выбери действие:</i>"
+)
+
+TEXT_CMD_LIST = (
+    "📖 <b>Команды бота</b>\n"
+    "━━━━━━━━━━━━━━━━━━━━\n\n"
+    "🛡 <b>Модерация</b>\n"
+    "• <code>.mute N</code> — замутить на N мин\n"
+    "• <code>.unmute</code> — снять мут\n"
+    "• <code>.warn N</code> — предупреждения\n"
+    "• <code>.unwarn</code> — сбросить\n"
+    "• <code>.spam N текст</code> — спам\n"
+    "• <code>.nonmute on/off</code> — обход мута\n\n"
+    "🎮 <b>Развлечения</b>\n"
+    "• <code>.info</code> — данные собеседника\n"
+    "• <code>.st текст</code> — текст по словам\n"
+    "• <code>.calc 5*5</code> — калькулятор\n"
+    "• <code>.qr текст</code> — QR-код\n"
+    "• <code>.clone on/off</code> — автоповтор\n"
+    "• <code>.echo on/off</code> — эхо\n\n"
+    "📸 <b>Медиа</b>\n"
+    "• Ответ на медиа → одноразовое фото в ЛС\n"
+    "━━━━━━━━━━━━━━━━━━━━"
+)
+
+TEXT_HOWTO = (
+    "📚 <b>Как подключить</b>\n"
+    "━━━━━━━━━━━━━━━━━━━━\n\n"
+    "1️⃣ Открой <b>Настройки</b>\n"
+    "2️⃣ Перейди в <b>Аккаунт</b>\n"
+    "3️⃣ Найди <b>Автоматизация чатов</b>\n"
+    "4️⃣ Выбери <b>AntiSpam Defender</b>\n\n"
+    "✅ <b>Разрешения:</b>\n"
+    "• Чтение сообщений\n"
+    "• Ответы на сообщения\n"
+    "• Удаление сообщений\n\n"
+    "💬 Пиши команды <b>в бизнес-чате</b>:\n"
+    "<code>.mute 10</code>\n"
+    "━━━━━━━━━━━━━━━━━━━━"
+)
+
+TEXT_REF = (
+    "👥 <b>Пригласить друга</b>\n"
+    "━━━━━━━━━━━━━━━━━━━━\n\n"
+    "🎁 За каждого друга — <b>+3 дня</b> к подписке!\n\n"
+    "🔗 <b>Твоя ссылка:</b>\n<code>{link}</code>\n\n"
+    "📊 <b>Приглашено:</b> {count}\n"
+    "━━━━━━━━━━━━━━━━━━━━"
+)
+
+
 # ================== /START ==================
 @dp.message(F.text == "/start")
 async def start_cmd(message):
@@ -413,14 +520,8 @@ async def start_cmd(message):
             "📢 Подпишись и нажми «✅ Я подписался».",
             parse_mode="HTML", reply_markup=subscribe_kb())
         return
-    try:
-        await message.answer_photo(
-            photo=types.FSInputFile(BANNER_PATH),
-            caption="🏠 <b>Главное меню</b>\n\nВыбери, что тебя интересует 👇",
-            parse_mode="HTML", reply_markup=main_menu())
-    except Exception as e:
-        logging.error(f"Баннер: {e}")
-        await message.answer("🏠 <b>Главное меню</b>\n\nВыбери 👇", parse_mode="HTML", reply_markup=main_menu())
+
+    await send_photo_banner(message.chat.id, TEXT_MAIN_MENU, reply_markup=main_menu())
 
 
 # ================== /STATS ==================
@@ -431,15 +532,18 @@ async def stats_cmd(message):
     trials = len(used_trials)
     last_users = await get_last_users(10)
     text = (
-        f"📊 <b>Статистика</b>\n\n"
-        f"👥 Юзеров: <b>{total}</b>\n"
+        "📊 <b>Статистика бота</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"👥 Пользователей: <b>{total}</b>\n"
         f"💎 Подписок: <b>{with_sub}</b>\n"
-        f"🎁 Триалов: <b>{trials}</b>\n\n🕐 <b>Последние 10:</b>\n"
+        f"🎁 Триалов: <b>{trials}</b>\n\n"
+        "🕐 <b>Последние 10:</b>\n"
     )
     for row in last_users:
         name = row["first_name"] or row["username"] or str(row["user_id"])
         uname = f"@{row['username']}" if row["username"] else ""
         text += f"• {name} {uname} (<code>{row['user_id']}</code>)\n"
+    text += "━━━━━━━━━━━━━━━━━━━━"
     await message.answer(text, parse_mode="HTML")
 
 
@@ -459,13 +563,15 @@ async def cmd_info(message: types.Message):
 
     uname = f"@{target.username}" if target.username else "—"
     text = (
-        f"ℹ️ <b>Данные собеседника</b>\n\n"
+        "ℹ️ <b>Данные собеседника</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
         f"👤 Имя: <b>{target.full_name}</b>\n"
         f"🔗 Username: <b>{uname}</b>\n"
         f"🆔 ID: <code>{target.id}</code>\n"
         f"🌐 Язык: <b>{target.language_code or '—'}</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━"
     )
-    await send_confirm(message.chat.id, text, message.business_connection_id, 15)
+    await send_confirm(message.chat.id, text, message.business_connection_id, 20)
 
 
 # ---- .calc / .c ----
@@ -491,12 +597,14 @@ async def cmd_calc(message: types.Message):
     if isinstance(result, float) and result.is_integer():
         result = int(result)
 
-    await send_confirm(
-        message.chat.id,
-        f"🧮 <code>{expr}</code> = <b>{result}</b>",
-        message.business_connection_id,
-        15,
+    text = (
+        "🧮 <b>Калькулятор</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"<code>{expr}</code>\n"
+        f"= <b>{result}</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━"
     )
+    await send_confirm(message.chat.id, text, message.business_connection_id, 20)
 
 
 # ---- .qr ----
@@ -521,7 +629,12 @@ async def cmd_qr(message: types.Message):
         await bot.send_photo(
             chat_id=message.chat.id,
             photo=BufferedInputFile(buf.read(), filename="qr.png"),
-            caption=f"📱 QR на: <code>{text[:100]}</code>",
+            caption=(
+                "📱 <b>QR-код</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                f"<code>{text[:100]}</code>\n"
+                "━━━━━━━━━━━━━━━━━━━━"
+            ),
             parse_mode="HTML",
             business_connection_id=message.business_connection_id,
         )
@@ -541,16 +654,15 @@ async def cmd_echo(message: types.Message):
     chat_id = message.chat.id
     if arg == "on":
         echo_chats[chat_id] = True
-        await send_confirm(chat_id, "🔁 Эхо включено", message.business_connection_id, 5)
+        await send_confirm(chat_id, "🔁 <b>Эхо включено</b>", message.business_connection_id, 5)
     else:
         echo_chats.pop(chat_id, None)
-        await send_confirm(chat_id, "🔇 Эхо выключено", message.business_connection_id, 5)
+        await send_confirm(chat_id, "🔇 <b>Эхо выключено</b>", message.business_connection_id, 5)
 
 
 # ---- Одноразовое фото ----
 @dp.message(F.reply_to_message, F.business_connection_id)
 async def onetime_media(message: types.Message):
-    """Ответ реплаем на фото/видео/кружок без текста-команды — копирует в ЛС владельцу."""
     if message.text and message.text.startswith("."):
         return
     replied = message.reply_to_message
@@ -572,7 +684,7 @@ async def onetime_media(message: types.Message):
         )
         await send_confirm(
             message.chat.id,
-            "✅ Медиа отправлено вам в ЛС",
+            "✅ <b>Медиа отправлено вам в ЛС</b>",
             message.business_connection_id,
             3,
         )
@@ -586,12 +698,7 @@ async def cb_check_sub(call):
     if await check_subscription(call.from_user.id):
         try: await call.message.delete()
         except: pass
-        try:
-            await call.message.answer_photo(photo=types.FSInputFile(BANNER_PATH),
-                caption="🏠 <b>Главное меню</b>\n\nВыбери 👇",
-                parse_mode="HTML", reply_markup=main_menu())
-        except:
-            await call.message.answer("🏠 <b>Главное меню</b>\n\nВыбери 👇", parse_mode="HTML", reply_markup=main_menu())
+        await send_photo_banner(call.message.chat.id, TEXT_MAIN_MENU, reply_markup=main_menu())
     else:
         await call.answer("❌ Ты ещё не подписался!", show_alert=True)
 
@@ -600,29 +707,14 @@ async def cb_check_sub(call):
 async def cb_back(call):
     try: await call.message.delete()
     except: pass
-    try:
-        await call.message.answer_photo(photo=types.FSInputFile(BANNER_PATH),
-            caption="🏠 <b>Главное меню</b>\n\nВыбери 👇",
-            parse_mode="HTML", reply_markup=main_menu())
-    except:
-        await call.message.answer("🏠 <b>Главное меню</b>\n\nВыбери 👇", parse_mode="HTML", reply_markup=main_menu())
+    await send_photo_banner(call.message.chat.id, TEXT_MAIN_MENU, reply_markup=main_menu())
 
 
 @dp.callback_query(F.data == "cmd_list")
 async def cb_cmds(call):
-    await call.message.answer(
-        "📖 <b>Команды:</b>\n\n"
-        "<code>.mute N</code> · <code>.unmute</code>\n"
-        "<code>.warn N</code> · <code>.unwarn</code>\n"
-        "<code>.spam N текст</code>\n"
-        "<code>.st текст</code>\n"
-        "<code>.clone on/off</code>\n"
-        "<code>.nonmute on/off</code>\n\n"
-        "🆕 <b>Новые:</b>\n"
-        "<code>.info</code> · <code>.calc 5*5</code>\n"
-        "<code>.qr текст</code> · <code>.echo on/off</code>\n"
-        "Ответ на медиа → одноразовое фото в ЛС",
-        parse_mode="HTML", reply_markup=back_kb())
+    try: await call.message.delete()
+    except: pass
+    await send_photo_banner(call.message.chat.id, TEXT_CMD_LIST, reply_markup=back_kb())
 
 
 @dp.callback_query(F.data == "sub_menu")
@@ -630,13 +722,20 @@ async def cb_sub(call):
     user_id = call.from_user.id
     now = datetime.now()
     current = subscriptions.get(user_id)
-    status = "не активна"
+    status = "❌ не активна"
     if current and current > now:
-        status = f"активна до {current.strftime('%d.%m.%Y')}"
+        status = f"✅ активна до {current.strftime('%d.%m.%Y')}"
     trial_text = f"🎁 Пробный период — {TRIAL_DAYS} дней\n\n" if user_id not in used_trials else ""
-    await call.message.answer(
-        f"💎 <b>Подписка</b>\n\n📌 Статус: <b>{status}</b>\n\n{trial_text}Выбери 👇",
-        parse_mode="HTML", reply_markup=plans_kb(user_id))
+    text = (
+        "💎 <b>Подписка</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"📌 Статус: <b>{status}</b>\n\n"
+        f"{trial_text}"
+        "👇 <i>Выбери тариф:</i>"
+    )
+    try: await call.message.delete()
+    except: pass
+    await send_photo_banner(call.message.chat.id, text, reply_markup=plans_kb(user_id))
 
 
 @dp.callback_query(F.data == "trial")
@@ -650,9 +749,16 @@ async def cb_trial(call):
     used_trials.add(user_id)
     until = now + timedelta(days=TRIAL_DAYS)
     subscriptions[user_id] = until
-    await call.message.answer(
-        f"🎁 <b>Пробный период активирован!</b>\n\n💎 {TRIAL_DAYS} дней.\n📅 До: <b>{until.strftime('%d.%m.%Y %H:%M')}</b>",
-        parse_mode="HTML")
+    text = (
+        "🎁 <b>Пробный период активирован!</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"💎 Дней: <b>{TRIAL_DAYS}</b>\n"
+        f"📅 До: <b>{until.strftime('%d.%m.%Y %H:%M')}</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━"
+    )
+    try: await call.message.delete()
+    except: pass
+    await send_photo_banner(call.message.chat.id, text, reply_markup=back_kb())
     await call.answer("Активировано ✅")
 
 
@@ -661,21 +767,18 @@ async def cb_ref(call):
     me = await bot.get_me()
     link = f"https://t.me/{me.username}?start=ref_{call.from_user.id}"
     invited = len(referrals.get(call.from_user.id, set()))
-    await call.message.answer(
-        f"👥 <b>Пригласить друга</b>\n\n<code>{link}</code>\n\n🎁 +3 дня!\n📊 Приглашено: <b>{invited}</b>",
-        parse_mode="HTML", reply_markup=back_kb())
+    text = TEXT_REF.format(link=link, count=invited)
+    try: await call.message.delete()
+    except: pass
+    await send_photo_banner(call.message.chat.id, text, reply_markup=back_kb())
     await call.answer()
 
 
 @dp.callback_query(F.data == "howto")
 async def cb_howto(call):
-    await call.message.answer(
-        "📚 <b>Как подключить:</b>\n\n"
-        "1️⃣ Настройки → Аккаунт → Автоматизация чатов\n"
-        "2️⃣ Выбери <b>AntiSpam Defender</b>\n"
-        "3️⃣ Дай разрешения: ✅ Чтение, ✅ Ответы, ✅ Удаление\n\n"
-        "4️⃣ Пиши команды <b>в бизнес-чате</b>.",
-        parse_mode="HTML", reply_markup=back_kb())
+    try: await call.message.delete()
+    except: pass
+    await send_photo_banner(call.message.chat.id, TEXT_HOWTO, reply_markup=back_kb())
     await call.answer()
 
 
@@ -687,16 +790,24 @@ async def cb_pay(call):
         [types.InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"paid_{plan}")],
         [types.InlineKeyboardButton(text="🔙 Назад", callback_data="sub_menu")],
     ])
-    await call.message.answer(
-        f"💳 <b>Оплата «{p['label']}»</b>\n\n💰 {p['rub']}₽\n💳 Карта: <code>{CARD_NUMBER}</code>",
-        parse_mode="HTML", reply_markup=kb)
+    text = (
+        f"💳 <b>Оплата «{p['label']}»</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"💰 Сумма: <b>{p['rub']}₽</b>\n"
+        f"💳 Карта: <code>{CARD_NUMBER}</code>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "После оплаты нажми «✅ Я оплатил»"
+    )
+    try: await call.message.delete()
+    except: pass
+    await send_photo_banner(call.message.chat.id, text, reply_markup=kb)
 
 
 @dp.callback_query(F.data.startswith("paid_"))
 async def cb_paid(call):
     plan = call.data.split("_")[1]
     pending_payments[call.from_user.id] = {"plan": plan}
-    await call.message.answer("📸 Пришли скриншот оплаты.")
+    await call.message.answer("📸 <b>Пришли скриншот оплаты.</b>", parse_mode="HTML")
 
 
 @dp.message(F.photo)
@@ -765,27 +876,21 @@ async def forward_to_owner(message):
         logging.error(f"ЛС: {e}")
 
 
-# ================== ТВОИ СУЩЕСТВУЮЩИЕ БИЗНЕС-ХЕНДЛЕРЫ ЗДЕСЬ ==================
-# Вставь сюда свои @dp.business_connection() и @dp.business_message() и pm_commands()
-# из прежнего файла — я их не видел (файл был обрезан).
+# ================== ТВОИ СУЩЕСТВУЮЩИЕ БИЗНЕС-ХЕНДЛЕРЫ ==================
+# Вставь сюда свои @dp.business_connection() и @dp.business_message() и pm_commands().
 #
-# ВАЖНО: в business_message() в самом начале добавь блок эха:
+# В business_message() в начале добавь:
 #
 #     chat_id = message.chat.id
 #     owner_id = await get_owner_id(message.business_connection_id)
 #     is_incoming = message.from_user and message.from_user.id != owner_id
 #     if echo_chats.get(chat_id) and is_incoming and message.text and not message.text.startswith("."):
 #         try:
-#             await bot.send_message(
-#                 chat_id=chat_id,
-#                 text=message.text,
-#                 business_connection_id=message.business_connection_id,
-#             )
+#             await bot.send_message(chat_id=chat_id, text=message.text,
+#                                    business_connection_id=message.business_connection_id)
 #         except Exception as e:
 #             logging.error(f"echo: {e}")
 #         return
-#
-# ================== КОНЕЦ ВСТАВКИ ==================
 
 
 # ================== MAIN ==================
