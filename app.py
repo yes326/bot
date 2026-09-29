@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 AntiSpam Defender Bot — Business-бот.
-Фикс: команды только от владельца подключения.
+Nonmute работает по умолчанию всегда.
 """
 
 import os
@@ -65,6 +65,7 @@ SIMILAR = {
 
 DB_PATH = "bot.db"
 NAME_UPDATE_INTERVAL = 86400
+CACHE_LIMIT = 200  # сколько последних сообщений хранить на чат
 
 BANNER_PATH = os.path.join(os.path.dirname(__file__), "angel.jpg")
 BANNER_FALLBACK = os.path.join(os.path.dirname(__file__), "IMG_20260918_155302_695.jpg")
@@ -83,7 +84,7 @@ business_owners = {}
 subscriptions = {}
 pending_payments = {}
 used_trials = set()
-message_cache = {}
+message_cache = {}  # {chat_id: {message_id: {...}}}
 warns = {}
 mutes = {}
 clone = {}
@@ -91,10 +92,9 @@ warn_messages = {}
 referrals = {}
 username_cache = {}
 last_conn_by_chat = {}
-nonmute_active = {}
+nonmute_active = {}  # {chat_id: False} — только отключения. По умолчанию включено.
 bot_rate = defaultdict(list)
 echo_chats = {}
-processed_updates = {}  # {update_id: timestamp} — дедупликация
 
 
 # ================== БАЗА ==================
@@ -197,15 +197,6 @@ async def delete_cmd(message):
         logging.error(f"❌ Ошибка удаления: {type(e).__name__}: {e}")
 
 
-async def delete_silent(chat_id, message_id, conn_id):
-    try:
-        result = await delete_business_msg(conn_id, [message_id])
-        return result is not None
-    except Exception as e:
-        logging.error(f"❌ delete_silent: {type(e).__name__}: {e}")
-        return False
-
-
 async def send_confirm(chat_id, text, conn_id, seconds=None):
     try:
         msg = await bot.send_message(chat_id, text, business_connection_id=conn_id, parse_mode="HTML")
@@ -282,6 +273,38 @@ def distort(text, level=3):
     if len(distorted) > 4000:
         distorted = distorted[:4000]
     return distorted
+
+
+# ================== КЭШ СООБЩЕНИЙ ==================
+def cache_message(message):
+    """Запоминаем сообщение для восстановления при удалении."""
+    try:
+        chat_id = message.chat.id
+        if chat_id not in message_cache:
+            message_cache[chat_id] = {}
+        entry = {
+            "from_id": message.from_user.id if message.from_user else None,
+            "from_name": message.from_user.full_name if message.from_user else "?",
+            "text": message.text or message.caption,
+            "photo": message.photo[-1].file_id if message.photo else None,
+            "video": message.video.file_id if message.video else None,
+            "video_note": message.video_note.file_id if message.video_note else None,
+            "voice": message.voice.file_id if message.voice else None,
+            "audio": message.audio.file_id if message.audio else None,
+            "document": message.document.file_id if message.document else None,
+            "sticker": message.sticker.file_id if message.sticker else None,
+            "animation": message.animation.file_id if message.animation else None,
+            "date": message.date.isoformat() if message.date else None,
+        }
+        message_cache[chat_id][message.message_id] = entry
+        # Ограничение размера
+        if len(message_cache[chat_id]) > CACHE_LIMIT:
+            # удаляем самые старые
+            sorted_ids = sorted(message_cache[chat_id].keys())
+            for old_id in sorted_ids[:len(sorted_ids) - CACHE_LIMIT]:
+                message_cache[chat_id].pop(old_id, None)
+    except Exception as e:
+        logging.error(f"cache_message: {e}")
 
 
 # ================== БЕЗОПАСНЫЙ КАЛЬКУЛЯТОР ==================
@@ -425,7 +448,7 @@ def plans_kb(user_id=None):
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-# ================== ТЕКСТЫ СЛАЙДОВ ==================
+# ================== ТЕКСТЫ ==================
 TEXT_MAIN_MENU = (
     "🏠 <b>Главное меню</b>\n"
     "━━━━━━━━━━━━━━━━━━━━\n"
@@ -552,19 +575,102 @@ async def on_business_connection(conn: types.BusinessConnection):
         logging.error(f"on_business_connection: {e}")
 
 
+# ================== NONMUTE: ВОССТАНОВЛЕНИЕ УДАЛЁННЫХ ==================
+@dp.deleted_business_messages()
+async def on_deleted_messages(event: types.BusinessMessagesDeleted):
+    """Ловим удалённые сообщения и восстанавливаем их (если nonmute активен)."""
+    try:
+        chat_id = event.chat.id
+        conn_id = event.business_connection_id
+
+        # По умолчанию включено. Отключается только .nonmute off
+        if nonmute_active.get(chat_id, True) is False:
+            return
+
+        cached = message_cache.get(chat_id, {})
+        if not cached:
+            return
+
+        for msg_id in event.message_ids:
+            data = cached.get(msg_id)
+            if not data:
+                continue
+
+            try:
+                if data.get("text"):
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=data["text"],
+                        business_connection_id=conn_id,
+                    )
+                elif data.get("photo"):
+                    await bot.send_photo(
+                        chat_id=chat_id,
+                        photo=data["photo"],
+                        business_connection_id=conn_id,
+                    )
+                elif data.get("video"):
+                    await bot.send_video(
+                        chat_id=chat_id,
+                        video=data["video"],
+                        business_connection_id=conn_id,
+                    )
+                elif data.get("video_note"):
+                    await bot.send_video_note(
+                        chat_id=chat_id,
+                        video_note=data["video_note"],
+                        business_connection_id=conn_id,
+                    )
+                elif data.get("voice"):
+                    await bot.send_voice(
+                        chat_id=chat_id,
+                        voice=data["voice"],
+                        business_connection_id=conn_id,
+                    )
+                elif data.get("audio"):
+                    await bot.send_audio(
+                        chat_id=chat_id,
+                        audio=data["audio"],
+                        business_connection_id=conn_id,
+                    )
+                elif data.get("document"):
+                    await bot.send_document(
+                        chat_id=chat_id,
+                        document=data["document"],
+                        business_connection_id=conn_id,
+                    )
+                elif data.get("sticker"):
+                    await bot.send_sticker(
+                        chat_id=chat_id,
+                        sticker=data["sticker"],
+                        business_connection_id=conn_id,
+                    )
+                elif data.get("animation"):
+                    await bot.send_animation(
+                        chat_id=chat_id,
+                        animation=data["animation"],
+                        business_connection_id=conn_id,
+                    )
+                logging.info(f"♻️ Восстановлено сообщение {msg_id} в чате {chat_id}")
+            except Exception as e:
+                logging.error(f"restore {msg_id}: {e}")
+            await asyncio.sleep(0.3)
+    except Exception as e:
+        logging.error(f"on_deleted_messages: {type(e).__name__}: {e}")
+
+
 # ================== БИЗНЕС-СООБЩЕНИЯ ==================
 @dp.business_message()
 async def business_msg(message: types.Message):
-    """Все команды и эхо в бизнес-чате.
-    ВАЖНО: команды обрабатываются ТОЛЬКО от владельца подключения.
-    """
     try:
         text = message.text or ""
         chat_id = message.chat.id
         conn_id = message.business_connection_id
         owner_id = await get_owner_id(conn_id)
 
-        # Запоминаем чат и username собеседника
+        # Кэшируем ВСЕ сообщения (для nonmute)
+        cache_message(message)
+
         if message.from_user:
             last_conn_by_chat[message.from_user.id] = conn_id
             if message.from_user.username:
@@ -573,7 +679,7 @@ async def business_msg(message: types.Message):
         is_incoming = message.from_user and message.from_user.id != owner_id
         is_from_owner = message.from_user and message.from_user.id == owner_id
 
-        # ---- Эхо (только входящие, только НЕ команды) ----
+        # Эхо
         if echo_chats.get(chat_id) and is_incoming and text and not text.startswith("."):
             try:
                 await bot.send_message(chat_id=chat_id, text=text, business_connection_id=conn_id)
@@ -584,10 +690,9 @@ async def business_msg(message: types.Message):
         if not text.startswith("."):
             return
 
-        # ===== Команды — ТОЛЬКО от владельца этого business_connection =====
-        # Если команду написал НЕ владелец (например, собеседник со своим подключением) — игнор
+        # Команды только от владельца
         if not is_from_owner:
-            logging.info(f"⏭ Игнор команды от не-владельца: {text[:30]} | user={message.from_user.id} owner={owner_id}")
+            logging.info(f"⏭ Игнор команды от не-владельца: {text[:30]}")
             return
 
         parts = text.split()
@@ -649,7 +754,7 @@ async def business_msg(message: types.Message):
         if cmd == ".spam":
             if len(parts) < 3:
                 await delete_cmd(message)
-                await send_confirm(chat_id, "❌ Использование: <code>.spam N текст</code>", conn_id, 5)
+                await send_confirm(chat_id, "❌ <code>.spam N текст</code>", conn_id, 5)
                 return
             try:
                 count = min(int(parts[1]), 30)
@@ -699,6 +804,7 @@ async def business_msg(message: types.Message):
         if cmd == ".nonmute":
             if len(parts) < 2:
                 await delete_cmd(message)
+                await send_confirm(chat_id, "ℹ️ <code>.nonmute on/off</code>", conn_id, 5)
                 return
             arg = parts[1].lower()
             if arg == "on":
@@ -706,7 +812,7 @@ async def business_msg(message: types.Message):
                 await delete_cmd(message)
                 await send_confirm(chat_id, "🛡 <b>Обход мута включён</b>", conn_id, 5)
             else:
-                nonmute_active.pop(chat_id, None)
+                nonmute_active[chat_id] = False
                 await delete_cmd(message)
                 await send_confirm(chat_id, "🛡 <b>Обход мута выключен</b>", conn_id, 5)
             return
@@ -738,7 +844,7 @@ async def business_msg(message: types.Message):
             expr = " ".join(parts[1:])
             await delete_cmd(message)
             if len(expr) > 200:
-                await send_confirm(chat_id, "❌ Слишком длинное выражение", conn_id, 5)
+                await send_confirm(chat_id, "❌ Слишком длинное", conn_id, 5)
                 return
             result = calc_expr(expr)
             if result is None:
@@ -764,7 +870,7 @@ async def business_msg(message: types.Message):
             qr_text = " ".join(parts[1:])
             await delete_cmd(message)
             if len(qr_text) > 1000:
-                await send_confirm(chat_id, "❌ Слишком длинный текст для QR", conn_id, 5)
+                await send_confirm(chat_id, "❌ Слишком длинный", conn_id, 5)
                 return
             try:
                 img = qrcode.make(qr_text)
@@ -785,7 +891,7 @@ async def business_msg(message: types.Message):
                 )
             except Exception as e:
                 logging.error(f"QR error: {e}")
-                await send_confirm(chat_id, "❌ Ошибка генерации QR", conn_id, 5)
+                await send_confirm(chat_id, "❌ Ошибка QR", conn_id, 5)
             return
 
         # ---- .echo on/off ----
@@ -811,9 +917,6 @@ async def business_msg(message: types.Message):
 # ================== ОДНОРАЗОВОЕ ФОТО ==================
 @dp.business_message(F.reply_to_message)
 async def onetime_media(message: types.Message):
-    """Ответ реплаем на медиа — копирует владельцу в ЛС.
-    Работает ТОЛЬКО когда reply делает владелец.
-    """
     if message.text and message.text.startswith("."):
         return
     replied = message.reply_to_message
@@ -826,7 +929,6 @@ async def onetime_media(message: types.Message):
     owner_id = await get_owner_id(conn_id)
     if not owner_id:
         return
-    # Только владелец может триггерить копирование
     if not message.from_user or message.from_user.id != owner_id:
         return
     try:
@@ -835,7 +937,7 @@ async def onetime_media(message: types.Message):
             from_chat_id=replied.chat.id,
             message_id=replied.message_id,
         )
-        await send_confirm(message.chat.id, "✅ <b>Медиа отправлено вам в ЛС</b>", conn_id, 3)
+        await send_confirm(message.chat.id, "✅ <b>Медиа отправлено в ЛС</b>", conn_id, 3)
     except Exception as e:
         logging.error(f"onetime_media: {e}")
 
@@ -872,13 +974,10 @@ async def pm_commands(message: types.Message):
             m = 10
         conn_id, chat_id = await find_connection_by_target(target)
         if not conn_id:
-            await message.answer(f"❌ Не нашёл чат с <b>{target}</b>", parse_mode="HTML")
+            await message.answer(f"❌ Не нашёл <b>{target}</b>", parse_mode="HTML")
             return
         mutes[chat_id] = datetime.now() + timedelta(minutes=m)
-        await bot_api("sendMessage", {
-            "chat_id": chat_id, "text": f"🔇 Мут на {m} мин",
-            "business_connection_id": conn_id,
-        })
+        await bot_api("sendMessage", {"chat_id": chat_id, "text": f"🔇 Мут на {m} мин", "business_connection_id": conn_id})
         await message.answer(f"✅ Мут <b>{target}</b> на {m} мин", parse_mode="HTML")
         return
 
@@ -889,10 +988,7 @@ async def pm_commands(message: types.Message):
             await message.answer(f"❌ Не нашёл <b>{target}</b>", parse_mode="HTML"); return
         mutes.pop(chat_id, None); warns.pop(chat_id, None)
         await delete_warn_msg(chat_id)
-        await bot_api("sendMessage", {
-            "chat_id": chat_id, "text": "🔊 Мут снят",
-            "business_connection_id": conn_id,
-        })
+        await bot_api("sendMessage", {"chat_id": chat_id, "text": "🔊 Мут снят", "business_connection_id": conn_id})
         await message.answer(f"✅ Мут снят с <b>{target}</b>", parse_mode="HTML")
         return
 
@@ -906,10 +1002,7 @@ async def pm_commands(message: types.Message):
         if not conn_id:
             await message.answer(f"❌ Не нашёл <b>{target}</b>", parse_mode="HTML"); return
         warns[chat_id] = warns.get(chat_id, 0) + c
-        await bot_api("sendMessage", {
-            "chat_id": chat_id, "text": f"⚠️ Warn {warns[chat_id]}/{WARN_LIMIT}",
-            "business_connection_id": conn_id,
-        })
+        await bot_api("sendMessage", {"chat_id": chat_id, "text": f"⚠️ Warn {warns[chat_id]}/{WARN_LIMIT}", "business_connection_id": conn_id})
         await message.answer(f"✅ Warn <b>{warns[chat_id]}</b> для <b>{target}</b>", parse_mode="HTML")
         return
 
@@ -919,10 +1012,7 @@ async def pm_commands(message: types.Message):
         if not conn_id:
             await message.answer(f"❌ Не нашёл <b>{target}</b>", parse_mode="HTML"); return
         warns.pop(chat_id, None)
-        await bot_api("sendMessage", {
-            "chat_id": chat_id, "text": "✅ Варны сброшены",
-            "business_connection_id": conn_id,
-        })
+        await bot_api("sendMessage", {"chat_id": chat_id, "text": "✅ Варны сброшены", "business_connection_id": conn_id})
         await message.answer(f"✅ Варны сброшены у <b>{target}</b>", parse_mode="HTML")
         return
 
