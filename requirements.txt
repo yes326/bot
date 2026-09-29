@@ -1,6 +1,0 @@
-aiogram==3.15.0
-aiosqlite
-aiohttp
-flask
-qrcode[pil]
-Pillow
