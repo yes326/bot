@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 AntiSpam Defender Bot — Business-бот.
-Красивый интерфейс + единый список команд + баннер на всех слайдах.
+Фикс: команды только от владельца подключения.
 """
 
 import os
@@ -94,6 +94,8 @@ last_conn_by_chat = {}
 nonmute_active = {}
 bot_rate = defaultdict(list)
 echo_chats = {}
+processed_updates = {}  # {update_id: timestamp} — дедупликация
+
 
 # ================== БАЗА ==================
 async def init_db():
@@ -541,7 +543,6 @@ async def stats_cmd(message):
 # ================== БИЗНЕС-ПОДКЛЮЧЕНИЕ ==================
 @dp.business_connection()
 async def on_business_connection(conn: types.BusinessConnection):
-    """Запоминаем владельца бизнес-подключения."""
     try:
         business_owners[conn.id] = conn.user.id
         username_cache[(conn.user.username or "").lower()] = conn.user.id
@@ -554,7 +555,9 @@ async def on_business_connection(conn: types.BusinessConnection):
 # ================== БИЗНЕС-СООБЩЕНИЯ ==================
 @dp.business_message()
 async def business_msg(message: types.Message):
-    """Все команды и эхо в бизнес-чате."""
+    """Все команды и эхо в бизнес-чате.
+    ВАЖНО: команды обрабатываются ТОЛЬКО от владельца подключения.
+    """
     try:
         text = message.text or ""
         chat_id = message.chat.id
@@ -568,8 +571,9 @@ async def business_msg(message: types.Message):
                 username_cache[message.from_user.username.lower()] = message.from_user.id
 
         is_incoming = message.from_user and message.from_user.id != owner_id
+        is_from_owner = message.from_user and message.from_user.id == owner_id
 
-        # ---- Эхо (только входящие) ----
+        # ---- Эхо (только входящие, только НЕ команды) ----
         if echo_chats.get(chat_id) and is_incoming and text and not text.startswith("."):
             try:
                 await bot.send_message(chat_id=chat_id, text=text, business_connection_id=conn_id)
@@ -578,6 +582,12 @@ async def business_msg(message: types.Message):
             return
 
         if not text.startswith("."):
+            return
+
+        # ===== Команды — ТОЛЬКО от владельца этого business_connection =====
+        # Если команду написал НЕ владелец (например, собеседник со своим подключением) — игнор
+        if not is_from_owner:
+            logging.info(f"⏭ Игнор команды от не-владельца: {text[:30]} | user={message.from_user.id} owner={owner_id}")
             return
 
         parts = text.split()
@@ -589,7 +599,6 @@ async def business_msg(message: types.Message):
                 minutes = int(parts[1]) if len(parts) > 1 else 10
             except ValueError:
                 minutes = 10
-            # Определяем цель: ответ на сообщение или собеседник
             target_id = chat_id
             if message.reply_to_message and message.reply_to_message.from_user:
                 target_id = message.reply_to_message.from_user.id
@@ -799,10 +808,12 @@ async def business_msg(message: types.Message):
         logging.error(f"business_msg error: {type(e).__name__}: {e}")
 
 
-# ================== ОДНОРАЗОВОЕ ФОТО (реплай на медиа) ==================
+# ================== ОДНОРАЗОВОЕ ФОТО ==================
 @dp.business_message(F.reply_to_message)
 async def onetime_media(message: types.Message):
-    """Ответ реплаем на медиа — копирует владельцу в ЛС."""
+    """Ответ реплаем на медиа — копирует владельцу в ЛС.
+    Работает ТОЛЬКО когда reply делает владелец.
+    """
     if message.text and message.text.startswith("."):
         return
     replied = message.reply_to_message
@@ -815,6 +826,9 @@ async def onetime_media(message: types.Message):
     owner_id = await get_owner_id(conn_id)
     if not owner_id:
         return
+    # Только владелец может триггерить копирование
+    if not message.from_user or message.from_user.id != owner_id:
+        return
     try:
         await bot.copy_message(
             chat_id=owner_id,
@@ -826,10 +840,9 @@ async def onetime_media(message: types.Message):
         logging.error(f"onetime_media: {e}")
 
 
-# ================== КОМАНДЫ В ЛИЧКЕ БОТА ==================
+# ================== КОМАНДЫ В ЛИЧКЕ ==================
 @dp.message(F.chat.type == "private", F.text.startswith("."))
 async def pm_commands(message: types.Message):
-    """Команды в личке — с @username или ID собеседника."""
     if message.from_user.id != OWNER_ID:
         await message.answer("❌ Только владелец может использовать команды.")
         return
