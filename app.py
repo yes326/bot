@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 AntiSpam Defender Bot — Business-бот.
-Обход мута работает ВСЕГДА. Команды — только от OWNER_ID.
+Фиксы: команды только от OWNER_ID + только через своё подключение (без дублей).
 """
 
 import os
@@ -92,7 +92,7 @@ warn_messages = {}
 referrals = {}
 username_cache = {}
 last_conn_by_chat = {}
-nonmute_active = {}  # {chat_id: False} — только отключения. По умолчанию ВКЛЮЧЕНО.
+nonmute_active = {}
 bot_rate = defaultdict(list)
 echo_chats = {}
 
@@ -561,15 +561,13 @@ async def on_business_connection(conn: types.BusinessConnection):
         logging.error(f"on_business_connection: {e}")
 
 
-# ================== NONMUTE: ВОССТАНОВЛЕНИЕ (ВСЕГДА ВКЛЮЧЕНО) ==================
+# ================== NONMUTE ==================
 @dp.deleted_business_messages()
 async def on_deleted_messages(event: types.BusinessMessagesDeleted):
-    """Восстанавливаем удалённые. По умолчанию ВСЕГДА включено."""
     try:
         chat_id = event.chat.id
         conn_id = event.business_connection_id
 
-        # Работает всегда, кроме случая когда явно .nonmute off
         if nonmute_active.get(chat_id, True) is False:
             logging.info(f"🔒 Восстановление выключено в чате {chat_id}")
             return
@@ -617,7 +615,7 @@ async def business_msg(message: types.Message):
         chat_id = message.chat.id
         conn_id = message.business_connection_id
 
-        # Кэшируем ВСЕ сообщения (для восстановления)
+        # Кэшируем все сообщения (для восстановления)
         cache_message(message)
 
         if message.from_user:
@@ -625,10 +623,11 @@ async def business_msg(message: types.Message):
             if message.from_user.username:
                 username_cache[message.from_user.username.lower()] = message.from_user.id
 
-        # Эхо — работает всегда, только для входящих не-команд
+        # Владелец ЭТОГО подключения
         owner_id_of_conn = await get_owner_id(conn_id)
         is_incoming = message.from_user and message.from_user.id != owner_id_of_conn
 
+        # Эхо — работает всегда, только для входящих не-команд
         if echo_chats.get(chat_id) and is_incoming and text and not text.startswith("."):
             try:
                 await bot.send_message(chat_id=chat_id, text=text, business_connection_id=conn_id)
@@ -640,11 +639,21 @@ async def business_msg(message: types.Message):
             return
 
         # =========================================================
-        #  Команды — ТОЛЬКО от OWNER_ID
+        #  ДВА ФИЛЬТРА:
+        #  1) команда только от глобального OWNER_ID
+        #  2) команда только через СВОЁ подключение (без дублей)
         # =========================================================
         if not message.from_user or message.from_user.id != OWNER_ID:
             uid = message.from_user.id if message.from_user else "?"
-            logging.info(f"⏭ Игнор команды от {uid}: {text[:30]}")
+            logging.info(f"⏭ Игнор (не OWNER_ID) от {uid}: {text[:30]}")
+            return
+
+        # Ключевая проверка: команда обрабатывается ТОЛЬКО через то подключение,
+        # где отправитель = владелец подключения. Это убирает дубли,
+        # когда собеседник тоже подключил бота.
+        if message.from_user.id != owner_id_of_conn:
+            logging.info(f"⏭ Игнор дубля команды (чужое подключение): {text[:30]} | "
+                         f"user={message.from_user.id} conn_owner={owner_id_of_conn}")
             return
 
         parts = text.split()
@@ -656,9 +665,14 @@ async def business_msg(message: types.Message):
                 minutes = int(parts[1]) if len(parts) > 1 else 10
             except ValueError:
                 minutes = 10
-            target_id = chat_id
             if message.reply_to_message and message.reply_to_message.from_user:
                 target_id = message.reply_to_message.from_user.id
+            else:
+                target_id = chat_id
+            if target_id == OWNER_ID:
+                await delete_cmd(message)
+                await send_confirm(chat_id, "❌ Ответь реплаем на сообщение собеседника", conn_id, 5)
+                return
             mutes[target_id] = datetime.now() + timedelta(minutes=minutes)
             await delete_cmd(message)
             await send_confirm(chat_id, f"🔇 <b>Мут на {minutes} мин</b>", conn_id, 5)
@@ -666,9 +680,10 @@ async def business_msg(message: types.Message):
 
         # ---- .unmute ----
         if cmd == ".unmute":
-            target_id = chat_id
             if message.reply_to_message and message.reply_to_message.from_user:
                 target_id = message.reply_to_message.from_user.id
+            else:
+                target_id = chat_id
             mutes.pop(target_id, None)
             await delete_cmd(message)
             await send_confirm(chat_id, "🔊 <b>Мут снят</b>", conn_id, 5)
@@ -680,9 +695,14 @@ async def business_msg(message: types.Message):
                 count = int(parts[1]) if len(parts) > 1 else 1
             except ValueError:
                 count = 1
-            target_id = chat_id
             if message.reply_to_message and message.reply_to_message.from_user:
                 target_id = message.reply_to_message.from_user.id
+            else:
+                target_id = chat_id
+            if target_id == OWNER_ID:
+                await delete_cmd(message)
+                await send_confirm(chat_id, "❌ Ответь реплаем на сообщение собеседника", conn_id, 5)
+                return
             warns[target_id] = warns.get(target_id, 0) + count
             await delete_cmd(message)
             await send_confirm(chat_id, f"⚠️ <b>Warn {warns[target_id]}/{WARN_LIMIT}</b>", conn_id, 5)
@@ -694,9 +714,10 @@ async def business_msg(message: types.Message):
 
         # ---- .unwarn ----
         if cmd == ".unwarn":
-            target_id = chat_id
             if message.reply_to_message and message.reply_to_message.from_user:
                 target_id = message.reply_to_message.from_user.id
+            else:
+                target_id = chat_id
             warns.pop(target_id, None)
             await delete_cmd(message)
             await send_confirm(chat_id, "✅ <b>Варны сброшены</b>", conn_id, 5)
@@ -879,6 +900,10 @@ async def onetime_media(message: types.Message):
     if not message.from_user or message.from_user.id != OWNER_ID:
         return
     conn_id = message.business_connection_id
+    owner_id_of_conn = await get_owner_id(conn_id)
+    # Только через своё подключение (без дублей)
+    if message.from_user.id != owner_id_of_conn:
+        return
     try:
         await bot.copy_message(
             chat_id=OWNER_ID,
