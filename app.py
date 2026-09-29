@@ -66,14 +66,11 @@ SIMILAR = {
 DB_PATH = "bot.db"
 NAME_UPDATE_INTERVAL = 86400
 
-# ===== БАННЕР =====
 BANNER_PATH = os.path.join(os.path.dirname(__file__), "angel.jpg")
-# Fallback, если angel.jpg нет
 BANNER_FALLBACK = os.path.join(os.path.dirname(__file__), "IMG_20260918_155302_695.jpg")
 
 
 def get_banner_path():
-    """Возвращает путь к баннеру: angel.jpg если есть, иначе старый."""
     if os.path.exists(BANNER_PATH):
         return BANNER_PATH
     if os.path.exists(BANNER_FALLBACK):
@@ -219,7 +216,6 @@ async def send_confirm(chat_id, text, conn_id, seconds=None):
 
 
 async def send_photo_banner(chat_id, caption, conn_id=None, reply_markup=None, parse_mode="HTML"):
-    """Отправляет фото-баннер с подписью. Работает и в бизнес-чате, и в ЛС."""
     path = get_banner_path()
     if path:
         try:
@@ -236,13 +232,8 @@ async def send_photo_banner(chat_id, caption, conn_id=None, reply_markup=None, p
             return await bot.send_photo(**kwargs)
         except Exception as e:
             logging.error(f"send_photo_banner: {e}")
-    # Fallback — текстом
     try:
-        kwargs = {
-            "chat_id": chat_id,
-            "text": caption,
-            "parse_mode": parse_mode,
-        }
+        kwargs = {"chat_id": chat_id, "text": caption, "parse_mode": parse_mode}
         if reply_markup:
             kwargs["reply_markup"] = reply_markup
         if conn_id:
@@ -432,7 +423,7 @@ def plans_kb(user_id=None):
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-# ================== ТЕКСТЫ СЛАЙДОВ (красивые) ==================
+# ================== ТЕКСТЫ СЛАЙДОВ ==================
 TEXT_MAIN_MENU = (
     "🏠 <b>Главное меню</b>\n"
     "━━━━━━━━━━━━━━━━━━━━\n"
@@ -547,122 +538,271 @@ async def stats_cmd(message):
     await message.answer(text, parse_mode="HTML")
 
 
-# ================== ВОЛНА 1: .info / .calc / .qr / .echo / одноразовое фото ==================
-
-# ---- .info ----
-@dp.message(F.text == ".info")
-async def cmd_info(message: types.Message):
-    if not message.business_connection_id:
-        return
-    await delete_cmd(message)
-
-    target = message.reply_to_message.from_user if message.reply_to_message else message.from_user
-    if not target:
-        await send_confirm(message.chat.id, "❌ Не удалось получить данные", message.business_connection_id, 5)
-        return
-
-    uname = f"@{target.username}" if target.username else "—"
-    text = (
-        "ℹ️ <b>Данные собеседника</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        f"👤 Имя: <b>{target.full_name}</b>\n"
-        f"🔗 Username: <b>{uname}</b>\n"
-        f"🆔 ID: <code>{target.id}</code>\n"
-        f"🌐 Язык: <b>{target.language_code or '—'}</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━"
-    )
-    await send_confirm(message.chat.id, text, message.business_connection_id, 20)
-
-
-# ---- .calc / .c ----
-@dp.message(F.text.regexp(r"^\.(calc|c)\s+.+"))
-async def cmd_calc(message: types.Message):
-    if not message.business_connection_id:
-        return
-    await delete_cmd(message)
-
-    parts = message.text.split(maxsplit=1)
-    if len(parts) < 2:
-        return
-    expr = parts[1].strip()
-    if len(expr) > 200:
-        await send_confirm(message.chat.id, "❌ Слишком длинное выражение", message.business_connection_id, 5)
-        return
-
-    result = calc_expr(expr)
-    if result is None:
-        await send_confirm(message.chat.id, "❌ Не могу посчитать", message.business_connection_id, 5)
-        return
-
-    if isinstance(result, float) and result.is_integer():
-        result = int(result)
-
-    text = (
-        "🧮 <b>Калькулятор</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        f"<code>{expr}</code>\n"
-        f"= <b>{result}</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━"
-    )
-    await send_confirm(message.chat.id, text, message.business_connection_id, 20)
-
-
-# ---- .qr ----
-@dp.message(F.text.regexp(r"^\.qr\s+.+"))
-async def cmd_qr(message: types.Message):
-    if not message.business_connection_id:
-        return
-    await delete_cmd(message)
-
-    text = message.text.split(maxsplit=1)[1].strip()
-    if not text:
-        return
-    if len(text) > 1000:
-        await send_confirm(message.chat.id, "❌ Слишком длинный текст для QR", message.business_connection_id, 5)
-        return
-
+# ================== БИЗНЕС-ПОДКЛЮЧЕНИЕ ==================
+@dp.business_connection()
+async def on_business_connection(conn: types.BusinessConnection):
+    """Запоминаем владельца бизнес-подключения."""
     try:
-        img = qrcode.make(text)
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        buf.seek(0)
-        await bot.send_photo(
-            chat_id=message.chat.id,
-            photo=BufferedInputFile(buf.read(), filename="qr.png"),
-            caption=(
-                "📱 <b>QR-код</b>\n"
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                f"<code>{text[:100]}</code>\n"
-                "━━━━━━━━━━━━━━━━━━━━"
-            ),
-            parse_mode="HTML",
-            business_connection_id=message.business_connection_id,
-        )
+        business_owners[conn.id] = conn.user.id
+        username_cache[(conn.user.username or "").lower()] = conn.user.id
+        last_conn_by_chat[conn.user.id] = conn.id
+        logging.info(f"🔗 Business connection: {conn.id} owner={conn.user.id} @{conn.user.username}")
     except Exception as e:
-        logging.error(f"QR error: {e}")
-        await send_confirm(message.chat.id, "❌ Ошибка генерации QR", message.business_connection_id, 5)
+        logging.error(f"on_business_connection: {e}")
 
 
-# ---- .echo on/off ----
-@dp.message(F.text.regexp(r"^\.echo\s+(on|off)$"))
-async def cmd_echo(message: types.Message):
-    if not message.business_connection_id:
-        return
-    await delete_cmd(message)
+# ================== БИЗНЕС-СООБЩЕНИЯ ==================
+@dp.business_message()
+async def business_msg(message: types.Message):
+    """Все команды и эхо в бизнес-чате."""
+    try:
+        text = message.text or ""
+        chat_id = message.chat.id
+        conn_id = message.business_connection_id
+        owner_id = await get_owner_id(conn_id)
 
-    arg = message.text.split()[1].lower()
-    chat_id = message.chat.id
-    if arg == "on":
-        echo_chats[chat_id] = True
-        await send_confirm(chat_id, "🔁 <b>Эхо включено</b>", message.business_connection_id, 5)
-    else:
-        echo_chats.pop(chat_id, None)
-        await send_confirm(chat_id, "🔇 <b>Эхо выключено</b>", message.business_connection_id, 5)
+        # Запоминаем чат и username собеседника
+        if message.from_user:
+            last_conn_by_chat[message.from_user.id] = conn_id
+            if message.from_user.username:
+                username_cache[message.from_user.username.lower()] = message.from_user.id
+
+        is_incoming = message.from_user and message.from_user.id != owner_id
+
+        # ---- Эхо (только входящие) ----
+        if echo_chats.get(chat_id) and is_incoming and text and not text.startswith("."):
+            try:
+                await bot.send_message(chat_id=chat_id, text=text, business_connection_id=conn_id)
+            except Exception as e:
+                logging.error(f"echo: {e}")
+            return
+
+        if not text.startswith("."):
+            return
+
+        parts = text.split()
+        cmd = parts[0].lower()
+
+        # ---- .mute N ----
+        if cmd == ".mute":
+            try:
+                minutes = int(parts[1]) if len(parts) > 1 else 10
+            except ValueError:
+                minutes = 10
+            # Определяем цель: ответ на сообщение или собеседник
+            target_id = chat_id
+            if message.reply_to_message and message.reply_to_message.from_user:
+                target_id = message.reply_to_message.from_user.id
+            mutes[target_id] = datetime.now() + timedelta(minutes=minutes)
+            await delete_cmd(message)
+            await send_confirm(chat_id, f"🔇 <b>Мут на {minutes} мин</b>", conn_id, 5)
+            return
+
+        # ---- .unmute ----
+        if cmd == ".unmute":
+            target_id = chat_id
+            if message.reply_to_message and message.reply_to_message.from_user:
+                target_id = message.reply_to_message.from_user.id
+            mutes.pop(target_id, None)
+            await delete_cmd(message)
+            await send_confirm(chat_id, "🔊 <b>Мут снят</b>", conn_id, 5)
+            return
+
+        # ---- .warn N ----
+        if cmd == ".warn":
+            try:
+                count = int(parts[1]) if len(parts) > 1 else 1
+            except ValueError:
+                count = 1
+            target_id = chat_id
+            if message.reply_to_message and message.reply_to_message.from_user:
+                target_id = message.reply_to_message.from_user.id
+            warns[target_id] = warns.get(target_id, 0) + count
+            await delete_cmd(message)
+            await send_confirm(chat_id, f"⚠️ <b>Warn {warns[target_id]}/{WARN_LIMIT}</b>", conn_id, 5)
+            if warns[target_id] >= WARN_LIMIT:
+                mutes[target_id] = datetime.now() + timedelta(minutes=WARN_MUTE_MINUTES)
+                warns[target_id] = 0
+                await send_confirm(chat_id, f"🔇 <b>Лимит варнов — мут {WARN_MUTE_MINUTES} мин</b>", conn_id, 10)
+            return
+
+        # ---- .unwarn ----
+        if cmd == ".unwarn":
+            target_id = chat_id
+            if message.reply_to_message and message.reply_to_message.from_user:
+                target_id = message.reply_to_message.from_user.id
+            warns.pop(target_id, None)
+            await delete_cmd(message)
+            await send_confirm(chat_id, "✅ <b>Варны сброшены</b>", conn_id, 5)
+            return
+
+        # ---- .spam N текст ----
+        if cmd == ".spam":
+            if len(parts) < 3:
+                await delete_cmd(message)
+                await send_confirm(chat_id, "❌ Использование: <code>.spam N текст</code>", conn_id, 5)
+                return
+            try:
+                count = min(int(parts[1]), 30)
+            except ValueError:
+                count = 1
+            spam_text = " ".join(parts[2:])
+            await delete_cmd(message)
+            for _ in range(count):
+                try:
+                    await bot.send_message(chat_id=chat_id, text=spam_text, business_connection_id=conn_id)
+                    await asyncio.sleep(0.5)
+                except Exception as e:
+                    logging.error(f"spam: {e}")
+                    break
+            return
+
+        # ---- .st текст ----
+        if cmd == ".st":
+            if len(parts) < 2:
+                await delete_cmd(message)
+                return
+            src = " ".join(parts[1:])
+            await delete_cmd(message)
+            try:
+                await bot.send_message(chat_id=chat_id, text=distort(src), business_connection_id=conn_id)
+            except Exception as e:
+                logging.error(f"st: {e}")
+            return
+
+        # ---- .clone on/off ----
+        if cmd == ".clone":
+            if len(parts) < 2:
+                await delete_cmd(message)
+                return
+            arg = parts[1].lower()
+            if arg == "on":
+                clone[chat_id] = True
+                await delete_cmd(message)
+                await send_confirm(chat_id, "🧬 <b>Клон включён</b>", conn_id, 5)
+            else:
+                clone.pop(chat_id, None)
+                await delete_cmd(message)
+                await send_confirm(chat_id, "🧬 <b>Клон выключен</b>", conn_id, 5)
+            return
+
+        # ---- .nonmute on/off ----
+        if cmd == ".nonmute":
+            if len(parts) < 2:
+                await delete_cmd(message)
+                return
+            arg = parts[1].lower()
+            if arg == "on":
+                nonmute_active[chat_id] = True
+                await delete_cmd(message)
+                await send_confirm(chat_id, "🛡 <b>Обход мута включён</b>", conn_id, 5)
+            else:
+                nonmute_active.pop(chat_id, None)
+                await delete_cmd(message)
+                await send_confirm(chat_id, "🛡 <b>Обход мута выключен</b>", conn_id, 5)
+            return
+
+        # ---- .info ----
+        if cmd == ".info":
+            await delete_cmd(message)
+            target = message.reply_to_message.from_user if message.reply_to_message else message.from_user
+            if not target:
+                return
+            uname = f"@{target.username}" if target.username else "—"
+            out = (
+                "ℹ️ <b>Данные собеседника</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                f"👤 Имя: <b>{target.full_name}</b>\n"
+                f"🔗 Username: <b>{uname}</b>\n"
+                f"🆔 ID: <code>{target.id}</code>\n"
+                f"🌐 Язык: <b>{target.language_code or '—'}</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━"
+            )
+            await send_confirm(chat_id, out, conn_id, 20)
+            return
+
+        # ---- .calc / .c ----
+        if cmd in (".calc", ".c"):
+            if len(parts) < 2:
+                await delete_cmd(message)
+                return
+            expr = " ".join(parts[1:])
+            await delete_cmd(message)
+            if len(expr) > 200:
+                await send_confirm(chat_id, "❌ Слишком длинное выражение", conn_id, 5)
+                return
+            result = calc_expr(expr)
+            if result is None:
+                await send_confirm(chat_id, "❌ Не могу посчитать", conn_id, 5)
+                return
+            if isinstance(result, float) and result.is_integer():
+                result = int(result)
+            out = (
+                "🧮 <b>Калькулятор</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                f"<code>{expr}</code>\n"
+                f"= <b>{result}</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━"
+            )
+            await send_confirm(chat_id, out, conn_id, 20)
+            return
+
+        # ---- .qr текст ----
+        if cmd == ".qr":
+            if len(parts) < 2:
+                await delete_cmd(message)
+                return
+            qr_text = " ".join(parts[1:])
+            await delete_cmd(message)
+            if len(qr_text) > 1000:
+                await send_confirm(chat_id, "❌ Слишком длинный текст для QR", conn_id, 5)
+                return
+            try:
+                img = qrcode.make(qr_text)
+                buf = io.BytesIO()
+                img.save(buf, format="PNG")
+                buf.seek(0)
+                await bot.send_photo(
+                    chat_id=chat_id,
+                    photo=BufferedInputFile(buf.read(), filename="qr.png"),
+                    caption=(
+                        "📱 <b>QR-код</b>\n"
+                        "━━━━━━━━━━━━━━━━━━━━\n"
+                        f"<code>{qr_text[:100]}</code>\n"
+                        "━━━━━━━━━━━━━━━━━━━━"
+                    ),
+                    parse_mode="HTML",
+                    business_connection_id=conn_id,
+                )
+            except Exception as e:
+                logging.error(f"QR error: {e}")
+                await send_confirm(chat_id, "❌ Ошибка генерации QR", conn_id, 5)
+            return
+
+        # ---- .echo on/off ----
+        if cmd == ".echo":
+            if len(parts) < 2:
+                await delete_cmd(message)
+                return
+            arg = parts[1].lower()
+            if arg == "on":
+                echo_chats[chat_id] = True
+                await delete_cmd(message)
+                await send_confirm(chat_id, "🔁 <b>Эхо включено</b>", conn_id, 5)
+            else:
+                echo_chats.pop(chat_id, None)
+                await delete_cmd(message)
+                await send_confirm(chat_id, "🔇 <b>Эхо выключено</b>", conn_id, 5)
+            return
+
+    except Exception as e:
+        logging.error(f"business_msg error: {type(e).__name__}: {e}")
 
 
-# ---- Одноразовое фото ----
-@dp.message(F.reply_to_message, F.business_connection_id)
+# ================== ОДНОРАЗОВОЕ ФОТО (реплай на медиа) ==================
+@dp.business_message(F.reply_to_message)
 async def onetime_media(message: types.Message):
+    """Ответ реплаем на медиа — копирует владельцу в ЛС."""
     if message.text and message.text.startswith("."):
         return
     replied = message.reply_to_message
@@ -671,25 +811,107 @@ async def onetime_media(message: types.Message):
     has_media = bool(replied.photo or replied.video or replied.video_note)
     if not has_media:
         return
-
-    owner_id = await get_owner_id(message.business_connection_id)
+    conn_id = message.business_connection_id
+    owner_id = await get_owner_id(conn_id)
     if not owner_id:
         return
-
     try:
         await bot.copy_message(
             chat_id=owner_id,
             from_chat_id=replied.chat.id,
             message_id=replied.message_id,
         )
-        await send_confirm(
-            message.chat.id,
-            "✅ <b>Медиа отправлено вам в ЛС</b>",
-            message.business_connection_id,
-            3,
-        )
+        await send_confirm(message.chat.id, "✅ <b>Медиа отправлено вам в ЛС</b>", conn_id, 3)
     except Exception as e:
         logging.error(f"onetime_media: {e}")
+
+
+# ================== КОМАНДЫ В ЛИЧКЕ БОТА ==================
+@dp.message(F.chat.type == "private", F.text.startswith("."))
+async def pm_commands(message: types.Message):
+    """Команды в личке — с @username или ID собеседника."""
+    if message.from_user.id != OWNER_ID:
+        await message.answer("❌ Только владелец может использовать команды.")
+        return
+
+    text = (message.text or "").strip()
+    parts = text.split()
+
+    if text == ".help":
+        await message.answer(
+            "📖 <b>Команды в личке бота:</b>\n\n"
+            "<code>.mute @user N</code> — мут на N мин\n"
+            "<code>.unmute @user</code> — снять мут\n"
+            "<code>.warn @user N</code> — варны\n"
+            "<code>.unwarn @user</code> — сбросить\n"
+            "<code>.nonmute @user on/off</code> — обход мута\n"
+            "<code>.spam @user N текст</code> — спам\n"
+            "<code>.clone @user on/off</code> — автоповтор\n\n"
+            "⚠️ Вместо @user можно ID.",
+            parse_mode="HTML")
+        return
+
+    if parts[0] == ".mute" and len(parts) >= 3:
+        target = parts[1].lstrip("@")
+        try:
+            m = int(parts[2])
+        except ValueError:
+            m = 10
+        conn_id, chat_id = await find_connection_by_target(target)
+        if not conn_id:
+            await message.answer(f"❌ Не нашёл чат с <b>{target}</b>", parse_mode="HTML")
+            return
+        mutes[chat_id] = datetime.now() + timedelta(minutes=m)
+        await bot_api("sendMessage", {
+            "chat_id": chat_id, "text": f"🔇 Мут на {m} мин",
+            "business_connection_id": conn_id,
+        })
+        await message.answer(f"✅ Мут <b>{target}</b> на {m} мин", parse_mode="HTML")
+        return
+
+    if parts[0] == ".unmute" and len(parts) >= 2:
+        target = parts[1].lstrip("@")
+        conn_id, chat_id = await find_connection_by_target(target)
+        if not conn_id:
+            await message.answer(f"❌ Не нашёл <b>{target}</b>", parse_mode="HTML"); return
+        mutes.pop(chat_id, None); warns.pop(chat_id, None)
+        await delete_warn_msg(chat_id)
+        await bot_api("sendMessage", {
+            "chat_id": chat_id, "text": "🔊 Мут снят",
+            "business_connection_id": conn_id,
+        })
+        await message.answer(f"✅ Мут снят с <b>{target}</b>", parse_mode="HTML")
+        return
+
+    if parts[0] == ".warn" and len(parts) >= 3:
+        target = parts[1].lstrip("@")
+        try:
+            c = int(parts[2])
+        except ValueError:
+            c = 1
+        conn_id, chat_id = await find_connection_by_target(target)
+        if not conn_id:
+            await message.answer(f"❌ Не нашёл <b>{target}</b>", parse_mode="HTML"); return
+        warns[chat_id] = warns.get(chat_id, 0) + c
+        await bot_api("sendMessage", {
+            "chat_id": chat_id, "text": f"⚠️ Warn {warns[chat_id]}/{WARN_LIMIT}",
+            "business_connection_id": conn_id,
+        })
+        await message.answer(f"✅ Warn <b>{warns[chat_id]}</b> для <b>{target}</b>", parse_mode="HTML")
+        return
+
+    if parts[0] == ".unwarn" and len(parts) >= 2:
+        target = parts[1].lstrip("@")
+        conn_id, chat_id = await find_connection_by_target(target)
+        if not conn_id:
+            await message.answer(f"❌ Не нашёл <b>{target}</b>", parse_mode="HTML"); return
+        warns.pop(chat_id, None)
+        await bot_api("sendMessage", {
+            "chat_id": chat_id, "text": "✅ Варны сброшены",
+            "business_connection_id": conn_id,
+        })
+        await message.answer(f"✅ Варны сброшены у <b>{target}</b>", parse_mode="HTML")
+        return
 
 
 # ================== CALLBACKS ==================
@@ -874,23 +1096,6 @@ async def forward_to_owner(message):
             parse_mode="HTML")
     except Exception as e:
         logging.error(f"ЛС: {e}")
-
-
-# ================== ТВОИ СУЩЕСТВУЮЩИЕ БИЗНЕС-ХЕНДЛЕРЫ ==================
-# Вставь сюда свои @dp.business_connection() и @dp.business_message() и pm_commands().
-#
-# В business_message() в начале добавь:
-#
-#     chat_id = message.chat.id
-#     owner_id = await get_owner_id(message.business_connection_id)
-#     is_incoming = message.from_user and message.from_user.id != owner_id
-#     if echo_chats.get(chat_id) and is_incoming and message.text and not message.text.startswith("."):
-#         try:
-#             await bot.send_message(chat_id=chat_id, text=message.text,
-#                                    business_connection_id=message.business_connection_id)
-#         except Exception as e:
-#             logging.error(f"echo: {e}")
-#         return
 
 
 # ================== MAIN ==================
