@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 AntiSpam Defender Bot — Business-бот.
-Фиксы: команды только от OWNER_ID + только через своё подключение (без дублей).
+Обработка ТОЛЬКО своего подключения (owner = OWNER_ID). Без дублей.
 """
 
 import os
@@ -568,6 +568,11 @@ async def on_deleted_messages(event: types.BusinessMessagesDeleted):
         chat_id = event.chat.id
         conn_id = event.business_connection_id
 
+        # Только своё подключение
+        owner_id_of_conn = await get_owner_id(conn_id)
+        if owner_id_of_conn != OWNER_ID:
+            return
+
         if nonmute_active.get(chat_id, True) is False:
             logging.info(f"🔒 Восстановление выключено в чате {chat_id}")
             return
@@ -615,7 +620,17 @@ async def business_msg(message: types.Message):
         chat_id = message.chat.id
         conn_id = message.business_connection_id
 
-        # Кэшируем все сообщения (для восстановления)
+        # Владелец ЭТОГО подключения
+        owner_id_of_conn = await get_owner_id(conn_id)
+
+        # =========================================================
+        #  ГЛАВНАЯ ПРОВЕРКА: работаем ТОЛЬКО через своё подключение
+        #  Всё, что приходит через подключение собеседника — игнор.
+        # =========================================================
+        if owner_id_of_conn != OWNER_ID:
+            return
+
+        # Кэшируем все сообщения
         cache_message(message)
 
         if message.from_user:
@@ -623,11 +638,9 @@ async def business_msg(message: types.Message):
             if message.from_user.username:
                 username_cache[message.from_user.username.lower()] = message.from_user.id
 
-        # Владелец ЭТОГО подключения
-        owner_id_of_conn = await get_owner_id(conn_id)
-        is_incoming = message.from_user and message.from_user.id != owner_id_of_conn
+        is_incoming = message.from_user and message.from_user.id != OWNER_ID
 
-        # Эхо — работает всегда, только для входящих не-команд
+        # Эхо — только для входящих не-команд
         if echo_chats.get(chat_id) and is_incoming and text and not text.startswith("."):
             try:
                 await bot.send_message(chat_id=chat_id, text=text, business_connection_id=conn_id)
@@ -638,22 +651,8 @@ async def business_msg(message: types.Message):
         if not text.startswith("."):
             return
 
-        # =========================================================
-        #  ДВА ФИЛЬТРА:
-        #  1) команда только от глобального OWNER_ID
-        #  2) команда только через СВОЁ подключение (без дублей)
-        # =========================================================
+        # Команды — только от OWNER_ID
         if not message.from_user or message.from_user.id != OWNER_ID:
-            uid = message.from_user.id if message.from_user else "?"
-            logging.info(f"⏭ Игнор (не OWNER_ID) от {uid}: {text[:30]}")
-            return
-
-        # Ключевая проверка: команда обрабатывается ТОЛЬКО через то подключение,
-        # где отправитель = владелец подключения. Это убирает дубли,
-        # когда собеседник тоже подключил бота.
-        if message.from_user.id != owner_id_of_conn:
-            logging.info(f"⏭ Игнор дубля команды (чужое подключение): {text[:30]} | "
-                         f"user={message.from_user.id} conn_owner={owner_id_of_conn}")
             return
 
         parts = text.split()
@@ -901,8 +900,7 @@ async def onetime_media(message: types.Message):
         return
     conn_id = message.business_connection_id
     owner_id_of_conn = await get_owner_id(conn_id)
-    # Только через своё подключение (без дублей)
-    if message.from_user.id != owner_id_of_conn:
+    if owner_id_of_conn != OWNER_ID:
         return
     try:
         await bot.copy_message(
