@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 AntiSpam Defender Bot — Business-бот.
-Волна 1: .dl, .txt, .price, .rps, .ttt, .wordle, .ghost
-+ команды доступны ВСЕМ, кто подписан на канал и подключил бота.
+Ответы бота НЕ удаляются. Удаляются только команды юзера.
 """
 
 import os
@@ -204,6 +203,7 @@ async def delete_cmd(message):
 
 
 async def send_confirm(chat_id, text, conn_id, seconds=None, reply_markup=None):
+    """Отправляет ответ. seconds — только для .dl (автоудаление)."""
     try:
         kwargs = {"chat_id": chat_id, "text": text, "business_connection_id": conn_id, "parse_mode": "HTML"}
         if reply_markup:
@@ -478,7 +478,6 @@ async def background_name_updater():
 
 # ================== ПОДПИСКА ==================
 async def check_subscription(user_id):
-    """Проверка подписки на канал. True — подписан."""
     try:
         member = await bot.get_chat_member(CHANNEL_ID, user_id)
         return member.status not in ("left", "kicked")
@@ -688,14 +687,13 @@ async def on_business_connection(conn: types.BusinessConnection):
         logging.error(f"on_business_connection: {e}")
 
 
-# ================== NONMUTE / ВОССТАНОВЛЕНИЕ ==================
+# ================== NONMUTE ==================
 @dp.deleted_business_messages()
 async def on_deleted_messages(event: types.BusinessMessagesDeleted):
     try:
         chat_id = event.chat.id
         conn_id = event.business_connection_id
 
-        # Работаем для любого подключения
         owner_id_of_conn = await get_owner_id(conn_id)
         if not owner_id_of_conn:
             return
@@ -746,7 +744,6 @@ async def business_msg(message: types.Message):
         chat_id = message.chat.id
         conn_id = message.business_connection_id
 
-        # Владелец ЭТОГО подключения
         owner_id_of_conn = await get_owner_id(conn_id)
         if not owner_id_of_conn:
             return
@@ -760,7 +757,7 @@ async def business_msg(message: types.Message):
 
         is_incoming = message.from_user and message.from_user.id != owner_id_of_conn
 
-        # GHOST — копируем входящие владельцу в ЛС
+        # GHOST
         if ghost_chats.get(chat_id) and is_incoming and not text.startswith("."):
             try:
                 user = message.from_user
@@ -774,7 +771,7 @@ async def business_msg(message: types.Message):
             except Exception as e:
                 logging.error(f"ghost: {e}")
 
-        # ЭХО — только для входящих не-команд
+        # ЭХО
         if echo_chats.get(chat_id) and is_incoming and text and not text.startswith("."):
             try:
                 await bot.send_message(chat_id=chat_id, text=text, business_connection_id=conn_id)
@@ -785,16 +782,11 @@ async def business_msg(message: types.Message):
         if not text.startswith("."):
             return
 
-        # =========================================================
-        #  Команды — ТОЛЬКО от владельца ЭТОГО подключения
-        #  (любой юзер, кто подключил бота к своему бизнес-аккаунту)
-        # =========================================================
+        # Команды — ТОЛЬКО от владельца этого подключения
         if not message.from_user or message.from_user.id != owner_id_of_conn:
-            uid = message.from_user.id if message.from_user else "?"
-            logging.info(f"⏭ Игнор команды (не владелец подключения): {text[:30]} от {uid}")
             return
 
-        # ПРОВЕРКА ПОДПИСКИ НА КАНАЛ
+        # ПОДПИСКА
         if not await check_subscription(owner_id_of_conn):
             await delete_cmd(message)
             await send_confirm(
@@ -802,13 +794,13 @@ async def business_msg(message: types.Message):
                 "⚠️ <b>Нужна подписка на канал!</b>\n\n"
                 f"📢 Подпишись: {CHANNEL_LINK}\n\n"
                 "Затем напиши /start в ЛС бота.",
-                conn_id, 10)
+                conn_id)
             return
 
         parts = text.split()
         cmd = parts[0].lower()
 
-        # ---- .mute N ----
+        # ---- .mute ----
         if cmd == ".mute":
             try:
                 minutes = int(parts[1]) if len(parts) > 1 else 10
@@ -820,11 +812,11 @@ async def business_msg(message: types.Message):
                 target_id = chat_id
             if target_id == owner_id_of_conn:
                 await delete_cmd(message)
-                await send_confirm(chat_id, "❌ Ответь реплаем на сообщение собеседника", conn_id, 5)
+                await send_confirm(chat_id, "❌ Ответь реплаем на сообщение собеседника", conn_id)
                 return
             mutes[target_id] = datetime.now() + timedelta(minutes=minutes)
             await delete_cmd(message)
-            await send_confirm(chat_id, f"🔇 <b>Мут на {minutes} мин</b>", conn_id, 5)
+            await send_confirm(chat_id, f"🔇 <b>Мут на {minutes} мин</b>", conn_id)
             return
 
         # ---- .unmute ----
@@ -835,10 +827,10 @@ async def business_msg(message: types.Message):
                 target_id = chat_id
             mutes.pop(target_id, None)
             await delete_cmd(message)
-            await send_confirm(chat_id, "🔊 <b>Мут снят</b>", conn_id, 5)
+            await send_confirm(chat_id, "🔊 <b>Мут снят</b>", conn_id)
             return
 
-        # ---- .warn N ----
+        # ---- .warn ----
         if cmd == ".warn":
             try:
                 count = int(parts[1]) if len(parts) > 1 else 1
@@ -850,15 +842,15 @@ async def business_msg(message: types.Message):
                 target_id = chat_id
             if target_id == owner_id_of_conn:
                 await delete_cmd(message)
-                await send_confirm(chat_id, "❌ Ответь реплаем на сообщение собеседника", conn_id, 5)
+                await send_confirm(chat_id, "❌ Ответь реплаем на сообщение собеседника", conn_id)
                 return
             warns[target_id] = warns.get(target_id, 0) + count
             await delete_cmd(message)
-            await send_confirm(chat_id, f"⚠️ <b>Warn {warns[target_id]}/{WARN_LIMIT}</b>", conn_id, 5)
+            await send_confirm(chat_id, f"⚠️ <b>Warn {warns[target_id]}/{WARN_LIMIT}</b>", conn_id)
             if warns[target_id] >= WARN_LIMIT:
                 mutes[target_id] = datetime.now() + timedelta(minutes=WARN_MUTE_MINUTES)
                 warns[target_id] = 0
-                await send_confirm(chat_id, f"🔇 <b>Лимит варнов — мут {WARN_MUTE_MINUTES} мин</b>", conn_id, 10)
+                await send_confirm(chat_id, f"🔇 <b>Лимит варнов — мут {WARN_MUTE_MINUTES} мин</b>", conn_id)
             return
 
         # ---- .unwarn ----
@@ -869,14 +861,14 @@ async def business_msg(message: types.Message):
                 target_id = chat_id
             warns.pop(target_id, None)
             await delete_cmd(message)
-            await send_confirm(chat_id, "✅ <b>Варны сброшены</b>", conn_id, 5)
+            await send_confirm(chat_id, "✅ <b>Варны сброшены</b>", conn_id)
             return
 
-        # ---- .spam N текст ----
+        # ---- .spam ----
         if cmd == ".spam":
             if len(parts) < 3:
                 await delete_cmd(message)
-                await send_confirm(chat_id, "❌ <code>.spam N текст</code>", conn_id, 5)
+                await send_confirm(chat_id, "❌ <code>.spam N текст</code>", conn_id)
                 return
             try:
                 count = min(int(parts[1]), 30)
@@ -893,7 +885,7 @@ async def business_msg(message: types.Message):
                     break
             return
 
-        # ---- .st текст ----
+        # ---- .st ----
         if cmd == ".st":
             if len(parts) < 2:
                 await delete_cmd(message)
@@ -906,7 +898,7 @@ async def business_msg(message: types.Message):
                 logging.error(f"st: {e}")
             return
 
-        # ---- .clone on/off ----
+        # ---- .clone ----
         if cmd == ".clone":
             if len(parts) < 2:
                 await delete_cmd(message)
@@ -915,27 +907,27 @@ async def business_msg(message: types.Message):
             if arg == "on":
                 clone[chat_id] = True
                 await delete_cmd(message)
-                await send_confirm(chat_id, "🧬 <b>Клон включён</b>", conn_id, 5)
+                await send_confirm(chat_id, "🧬 <b>Клон включён</b>", conn_id)
             else:
                 clone.pop(chat_id, None)
                 await delete_cmd(message)
-                await send_confirm(chat_id, "🧬 <b>Клон выключен</b>", conn_id, 5)
+                await send_confirm(chat_id, "🧬 <b>Клон выключен</b>", conn_id)
             return
 
-        # ---- .nonmute on/off ----
+        # ---- .nonmute ----
         if cmd == ".nonmute":
             arg = parts[1].lower() if len(parts) > 1 else ""
             if arg == "on":
                 nonmute_active[chat_id] = True
                 await delete_cmd(message)
-                await send_confirm(chat_id, "🛡 <b>Обход мута включён</b>", conn_id, 5)
+                await send_confirm(chat_id, "🛡 <b>Обход мута включён</b>", conn_id)
             elif arg == "off":
                 nonmute_active[chat_id] = False
                 await delete_cmd(message)
-                await send_confirm(chat_id, "🔒 <b>Обход мута выключен</b>", conn_id, 5)
+                await send_confirm(chat_id, "🔒 <b>Обход мута выключен</b>", conn_id)
             else:
                 await delete_cmd(message)
-                await send_confirm(chat_id, "ℹ️ <code>.nonmute on/off</code>", conn_id, 5)
+                await send_confirm(chat_id, "ℹ️ <code>.nonmute on/off</code>", conn_id)
             return
 
         # ---- .info ----
@@ -954,7 +946,7 @@ async def business_msg(message: types.Message):
                 f"🌐 Язык: <b>{target.language_code or '—'}</b>\n"
                 "━━━━━━━━━━━━━━━━━━━━"
             )
-            await send_confirm(chat_id, out, conn_id, 20)
+            await send_confirm(chat_id, out, conn_id)
             return
 
         # ---- .calc / .c ----
@@ -965,11 +957,11 @@ async def business_msg(message: types.Message):
             expr = " ".join(parts[1:])
             await delete_cmd(message)
             if len(expr) > 200:
-                await send_confirm(chat_id, "❌ Слишком длинное", conn_id, 5)
+                await send_confirm(chat_id, "❌ Слишком длинное", conn_id)
                 return
             result = calc_expr(expr)
             if result is None:
-                await send_confirm(chat_id, "❌ Не могу посчитать", conn_id, 5)
+                await send_confirm(chat_id, "❌ Не могу посчитать", conn_id)
                 return
             if isinstance(result, float) and result.is_integer():
                 result = int(result)
@@ -980,10 +972,10 @@ async def business_msg(message: types.Message):
                 f"= <b>{result}</b>\n"
                 "━━━━━━━━━━━━━━━━━━━━"
             )
-            await send_confirm(chat_id, out, conn_id, 20)
+            await send_confirm(chat_id, out, conn_id)
             return
 
-        # ---- .qr текст ----
+        # ---- .qr ----
         if cmd == ".qr":
             if len(parts) < 2:
                 await delete_cmd(message)
@@ -991,7 +983,7 @@ async def business_msg(message: types.Message):
             qr_text = " ".join(parts[1:])
             await delete_cmd(message)
             if len(qr_text) > 1000:
-                await send_confirm(chat_id, "❌ Слишком длинный", conn_id, 5)
+                await send_confirm(chat_id, "❌ Слишком длинный", conn_id)
                 return
             try:
                 img = qrcode.make(qr_text)
@@ -1012,10 +1004,10 @@ async def business_msg(message: types.Message):
                 )
             except Exception as e:
                 logging.error(f"QR error: {e}")
-                await send_confirm(chat_id, "❌ Ошибка QR", conn_id, 5)
+                await send_confirm(chat_id, "❌ Ошибка QR", conn_id)
             return
 
-        # ---- .echo on/off ----
+        # ---- .echo ----
         if cmd == ".echo":
             if len(parts) < 2:
                 await delete_cmd(message)
@@ -1024,18 +1016,18 @@ async def business_msg(message: types.Message):
             if arg == "on":
                 echo_chats[chat_id] = True
                 await delete_cmd(message)
-                await send_confirm(chat_id, "🔁 <b>Эхо включено</b>", conn_id, 5)
+                await send_confirm(chat_id, "🔁 <b>Эхо включено</b>", conn_id)
             else:
                 echo_chats.pop(chat_id, None)
                 await delete_cmd(message)
-                await send_confirm(chat_id, "🔇 <b>Эхо выключено</b>", conn_id, 5)
+                await send_confirm(chat_id, "🔇 <b>Эхо выключено</b>", conn_id)
             return
 
-        # ---- .dl N текст ----
+        # ---- .dl (ЕДИНСТВЕННАЯ с автоудалением) ----
         if cmd == ".dl":
             if len(parts) < 3:
                 await delete_cmd(message)
-                await send_confirm(chat_id, "❌ <code>.dl N текст</code>", conn_id, 5)
+                await send_confirm(chat_id, "❌ <code>.dl N текст</code>", conn_id)
                 return
             try:
                 sec = min(int(parts[1]), 300)
@@ -1050,7 +1042,7 @@ async def business_msg(message: types.Message):
                 logging.error(f"dl: {e}")
             return
 
-        # ---- .txt текст ----
+        # ---- .txt ----
         if cmd == ".txt":
             if len(parts) < 2:
                 await delete_cmd(message)
@@ -1088,10 +1080,10 @@ async def business_msg(message: types.Message):
             await delete_cmd(message)
             try:
                 prices = await fetch_prices()
-                await send_confirm(chat_id, prices, conn_id, 30)
+                await send_confirm(chat_id, prices, conn_id)
             except Exception as e:
                 logging.error(f"price: {e}")
-                await send_confirm(chat_id, "❌ Не удалось получить курсы", conn_id, 5)
+                await send_confirm(chat_id, "❌ Не удалось получить курсы", conn_id)
             return
 
         # ---- .rps ----
@@ -1103,7 +1095,7 @@ async def business_msg(message: types.Message):
                 types.InlineKeyboardButton(text="✌️ Ножницы", callback_data=f"rps_ножницы_{bot_choice}"),
                 types.InlineKeyboardButton(text="✋ Бумага", callback_data=f"rps_бумага_{bot_choice}"),
             ]])
-            await send_confirm(chat_id, "🎮 <b>Камень-ножницы-бумага</b>\n\n👇 Сделай выбор:", conn_id, 30, reply_markup=kb)
+            await send_confirm(chat_id, "🎮 <b>Камень-ножницы-бумага</b>\n\n👇 Сделай выбор:", conn_id, reply_markup=kb)
             return
 
         # ---- .ttt ----
@@ -1111,42 +1103,42 @@ async def business_msg(message: types.Message):
             await delete_cmd(message)
             ttt_games[chat_id] = {"board": [" "] * 9}
             kb = ttt_board_kb(chat_id)
-            await send_confirm(chat_id, "❌ <b>Крестики-нолики</b>\n\n👇 Твой ход:", conn_id, 120, reply_markup=kb)
+            await send_confirm(chat_id, "❌ <b>Крестики-нолики</b>\n\n👇 Твой ход:", conn_id, reply_markup=kb)
             return
 
         # ---- .wordle ----
         if cmd == ".wordle":
             if len(parts) < 2:
                 await delete_cmd(message)
-                await send_confirm(chat_id, "❌ <code>.wordle слово</code>", conn_id, 5)
+                await send_confirm(chat_id, "❌ <code>.wordle слово</code>", conn_id)
                 return
             word = parts[1].lower()
             if not word.isalpha() or len(word) < 3:
                 await delete_cmd(message)
-                await send_confirm(chat_id, "❌ Слово должно быть от 3 букв", conn_id, 5)
+                await send_confirm(chat_id, "❌ Слово должно быть от 3 букв", conn_id)
                 return
             wordle_games[chat_id] = {"word": word, "tries": 5, "history": []}
             await delete_cmd(message)
-            await send_confirm(chat_id, wordle_render(wordle_games[chat_id]), conn_id, 120)
+            await send_confirm(chat_id, wordle_render(wordle_games[chat_id]), conn_id)
             return
 
-        # ---- .ghost on/off ----
+        # ---- .ghost ----
         if cmd == ".ghost":
             arg = parts[1].lower() if len(parts) > 1 else ""
             if arg == "on":
                 ghost_chats[chat_id] = True
                 await delete_cmd(message)
-                await send_confirm(chat_id, "👻 <b>Ghost включён</b> — входящие в ЛС", conn_id, 5)
+                await send_confirm(chat_id, "👻 <b>Ghost включён</b> — входящие в ЛС", conn_id)
             elif arg == "off":
                 ghost_chats.pop(chat_id, None)
                 await delete_cmd(message)
-                await send_confirm(chat_id, "👻 <b>Ghost выключен</b>", conn_id, 5)
+                await send_confirm(chat_id, "👻 <b>Ghost выключен</b>", conn_id)
             else:
                 await delete_cmd(message)
-                await send_confirm(chat_id, "ℹ️ <code>.ghost on/off</code>", conn_id, 5)
+                await send_confirm(chat_id, "ℹ️ <code>.ghost on/off</code>", conn_id)
             return
 
-        # ---- .wordle — попытка (без точки) ----
+        # ---- wordle guess ----
         if chat_id in wordle_games and len(text.split()) == 1 and text.isalpha():
             game = wordle_games[chat_id]
             guess = text.lower()
@@ -1157,13 +1149,13 @@ async def business_msg(message: types.Message):
             game["tries"] -= 1
             await delete_cmd(message)
             if guess == game["word"]:
-                await send_confirm(chat_id, wordle_render(game) + "\n\n🎉 <b>Угадал!</b>", conn_id, 60)
+                await send_confirm(chat_id, wordle_render(game) + "\n\n🎉 <b>Угадал!</b>", conn_id)
                 wordle_games.pop(chat_id, None)
             elif game["tries"] <= 0:
-                await send_confirm(chat_id, wordle_render(game) + f"\n\n😢 <b>Не угадал. Слово: {game['word']}</b>", conn_id, 60)
+                await send_confirm(chat_id, wordle_render(game) + f"\n\n😢 <b>Не угадал. Слово: {game['word']}</b>", conn_id)
                 wordle_games.pop(chat_id, None)
             else:
-                await send_confirm(chat_id, wordle_render(game), conn_id, 120)
+                await send_confirm(chat_id, wordle_render(game), conn_id)
             return
 
     except Exception as e:
@@ -1195,7 +1187,7 @@ async def onetime_media(message: types.Message):
             from_chat_id=replied.chat.id,
             message_id=replied.message_id,
         )
-        await send_confirm(message.chat.id, "✅ <b>Медиа отправлено в ЛС</b>", conn_id, 3)
+        await send_confirm(message.chat.id, "✅ <b>Медиа отправлено в ЛС</b>", conn_id)
     except Exception as e:
         logging.error(f"onetime_media: {e}")
 
@@ -1225,7 +1217,6 @@ async def cb_ttt(call):
     except Exception:
         await call.answer()
         return
-    # Найти чат по message
     chat_id = call.message.chat.id
     game = ttt_games.get(chat_id)
     if not game:
@@ -1238,7 +1229,6 @@ async def cb_ttt(call):
     board[idx] = "❌"
     winner = ttt_check_winner(board)
     if not winner:
-        # Ход бота — рандом
         free = [i for i in range(9) if board[i] == " "]
         if free:
             board[random.choice(free)] = "⭕"
