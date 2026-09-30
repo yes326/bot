@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 AntiSpam Defender Bot — Business-бот.
-fix: story — публикация снизу вверх + справа налево.
++ .type on/off — авто-шрифт для твоих сообщений.
 """
 
 import os
@@ -104,6 +104,19 @@ ttt_games = {}
 wordle_games = {}
 processed_updates = {}
 deleted_by_bot = set()
+type_styles = {}   # {chat_id: "bold"} — авто-шрифт по чату
+
+
+# ================== СТИЛИ ==================
+TYPE_STYLES = {
+    "bold":      ("<b>", "</b>"),
+    "italic":    ("<i>", "</i>"),
+    "underline": ("<u>", "</u>"),
+    "strike":    ("<s>", "</s>"),
+    "code":      ("<code>", "</code>"),
+    "quote":     ("<blockquote>", "</blockquote>"),
+    "spoiler":   ("<tg-spoiler>", "</tg-spoiler>"),
+}
 
 
 # ================== БАЗА ==================
@@ -251,8 +264,6 @@ async def send_chat_action(chat_id, conn_id, action):
             "business_connection_id": conn_id,
             "action": act,
         })
-        if result:
-            logging.info(f"✅ ChatAction '{act}' → chat={chat_id}")
         return result
     except Exception as e:
         logging.error(f"send_chat_action: {e}")
@@ -352,7 +363,6 @@ async def download_file(file_id: str):
             async with session.post(url, json={"file_id": file_id}) as r:
                 data = await r.json()
                 if not data.get("ok"):
-                    logging.error(f"getFile: {data}")
                     return None
                 file_path = data["result"]["file_path"]
             file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
@@ -364,11 +374,6 @@ async def download_file(file_id: str):
 
 
 def split_3x3(img_bytes: bytes):
-    """
-    Режет фото на 9 частей 3×3 для историй.
-    Публикуем в порядке: снизу вверх, справа налево —
-    так Telegram собирает сетку правильно.
-    """
     from PIL import Image
     try:
         img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
@@ -391,9 +396,8 @@ def split_3x3(img_bytes: bytes):
         cell_h = h // 3
 
         parts = []
-        # Снизу вверх И справа налево
-        for r in range(2, -1, -1):       # 2, 1, 0
-            for c in range(2, -1, -1):   # 2, 1, 0
+        for r in range(2, -1, -1):
+            for c in range(2, -1, -1):
                 box = (c * cell_w, r * cell_h, (c + 1) * cell_w, (r + 1) * cell_h)
                 piece = img.crop(box)
                 piece = piece.resize((1080, 1920), Image.LANCZOS)
@@ -417,12 +421,7 @@ async def post_story(conn_id: str, image_bytes: bytes, filename: str, caption: s
             form.add_field("caption", caption[:200])
         content_json = json.dumps({"type": "photo", "photo": "attach://story_photo"})
         form.add_field("content", content_json)
-        form.add_field(
-            "story_photo",
-            image_bytes,
-            filename=filename,
-            content_type="image/jpeg",
-        )
+        form.add_field("story_photo", image_bytes, filename=filename, content_type="image/jpeg")
         async with aiohttp.ClientSession() as session:
             async with session.post(url, data=form) as r:
                 res = await r.json()
@@ -435,15 +434,9 @@ async def post_story(conn_id: str, image_bytes: bytes, filename: str, caption: s
 
 # ================== КАЛЬКУЛЯТОР ==================
 _SAFE_OPS = {
-    ast.Add: operator.add,
-    ast.Sub: operator.sub,
-    ast.Mult: operator.mul,
-    ast.Div: operator.truediv,
-    ast.Pow: operator.pow,
-    ast.Mod: operator.mod,
-    ast.USub: operator.neg,
-    ast.UAdd: operator.pos,
-    ast.FloorDiv: operator.floordiv,
+    ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
+    ast.Div: operator.truediv, ast.Pow: operator.pow, ast.Mod: operator.mod,
+    ast.USub: operator.neg, ast.UAdd: operator.pos, ast.FloorDiv: operator.floordiv,
 }
 
 
@@ -537,11 +530,7 @@ def ttt_board_kb(chat_id: int):
 
 
 def ttt_check_winner(board):
-    lines = [
-        [0,1,2],[3,4,5],[6,7,8],
-        [0,3,6],[1,4,7],[2,5,8],
-        [0,4,8],[2,4,6],
-    ]
+    lines = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]]
     for a,b,c in lines:
         if board[a] != " " and board[a] == board[b] == board[c]:
             return board[a]
@@ -556,12 +545,9 @@ def wordle_render(game) -> str:
     for guess, marks in game["history"]:
         line = ""
         for i, ch in enumerate(guess):
-            if marks[i] == "G":
-                line += f"🟩{ch.upper()}"
-            elif marks[i] == "Y":
-                line += f"🟨{ch.upper()}"
-            else:
-                line += f"⬜{ch.upper()}"
+            if marks[i] == "G": line += f"🟩{ch.upper()}"
+            elif marks[i] == "Y": line += f"🟨{ch.upper()}"
+            else: line += f"⬜{ch.upper()}"
         out.append(line)
     out.append("")
     out.append("━━━━━━━━━━━━━━━━━━━━")
@@ -576,8 +562,7 @@ def wordle_marks(word: str, guess: str) -> str:
             marks[i] = "G"
             used[i] = True
     for i in range(len(word)):
-        if marks[i] == "G":
-            continue
+        if marks[i] == "G": continue
         for j in range(len(word)):
             if not used[j] and guess[i] == word[j]:
                 marks[i] = "Y"
@@ -724,6 +709,15 @@ TEXT_CMD_LIST = (
     "• <code>.rps</code> — камень-ножницы-бумага\n"
     "• <code>.ttt</code> — крестики-нолики\n"
     "• <code>.wordle слово</code> — угадай слово\n\n"
+    "🖋 <b>Авто-шрифт</b>\n"
+    "• <code>.type on bold</code> — жирный\n"
+    "• <code>.type on italic</code> — курсив\n"
+    "• <code>.type on underline</code> — подчёркнутый\n"
+    "• <code>.type on strike</code> — зачёркнутый\n"
+    "• <code>.type on code</code> — код\n"
+    "• <code>.type on quote</code> — цитата\n"
+    "• <code>.type on spoiler</code> — спойлер\n"
+    "• <code>.type off</code> — выключить\n\n"
     "📸 <b>Истории</b>\n"
     "• <code>.story</code> (ответ на фото) — 3×3 в историю\n\n"
     "📝 <b>Статусы</b>\n"
@@ -912,6 +906,7 @@ async def business_msg(message: types.Message):
                 username_cache[message.from_user.username.lower()] = message.from_user.id
 
         is_incoming = message.from_user and message.from_user.id != owner_id_of_conn
+        is_from_owner = message.from_user and message.from_user.id == owner_id_of_conn
 
         # GHOST
         if ghost_chats.get(chat_id) and is_incoming and not text.startswith("."):
@@ -935,6 +930,32 @@ async def business_msg(message: types.Message):
                 logging.error(f"echo: {e}")
             return
 
+        # =========================================================
+        #  АВТО-ШРИФТ: если включён и это моё сообщение (не команда)
+        # =========================================================
+        if is_from_owner and chat_id in type_styles and text and not text.startswith("."):
+            style = type_styles.get(chat_id)
+            if style and style in TYPE_STYLES:
+                open_tag, close_tag = TYPE_STYLES[style]
+                # Удаляем оригинал
+                try:
+                    deleted_by_bot.add(message.message_id)
+                    await delete_business_msg(conn_id, [message.message_id])
+                except Exception as e:
+                    logging.error(f"type del: {e}")
+                # Отправляем форматированное
+                try:
+                    formatted = f"{open_tag}{text}{close_tag}"
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=formatted,
+                        parse_mode="HTML",
+                        business_connection_id=conn_id,
+                    )
+                except Exception as e:
+                    logging.error(f"type send: {e}")
+                return  # дальше не идём — это не команда
+
         if not text.startswith("."):
             return
 
@@ -953,6 +974,43 @@ async def business_msg(message: types.Message):
 
         parts = text.split()
         cmd = parts[0].lower()
+
+        # ---- .type ----
+        if cmd == ".type":
+            arg = parts[1].lower() if len(parts) > 1 else ""
+            if arg == "off":
+                type_styles.pop(chat_id, None)
+                await delete_cmd(message)
+                await send_confirm(chat_id, "🖋 <b>Авто-шрифт выключен</b>", conn_id)
+                return
+            if arg == "on":
+                if len(parts) < 3:
+                    await delete_cmd(message)
+                    styles_list = ", ".join(f"<code>{s}</code>" for s in TYPE_STYLES.keys())
+                    await send_confirm(
+                        chat_id,
+                        f"❌ Укажи стиль:\n<code>.type on bold</code>\n\n"
+                        f"Доступные: {styles_list}",
+                        conn_id)
+                    return
+                style = parts[2].lower()
+                if style not in TYPE_STYLES:
+                    await delete_cmd(message)
+                    styles_list = ", ".join(f"<code>{s}</code>" for s in TYPE_STYLES.keys())
+                    await send_confirm(chat_id, f"❌ Неизвестный стиль. Доступные: {styles_list}", conn_id)
+                    return
+                type_styles[chat_id] = style
+                await delete_cmd(message)
+                await send_confirm(chat_id, f"🖋 <b>Авто-шрифт включён: {style}</b>", conn_id)
+                return
+            # без аргумента — статус
+            cur = type_styles.get(chat_id)
+            await delete_cmd(message)
+            if cur:
+                await send_confirm(chat_id, f"🖋 Авто-шрифт: <b>{cur}</b>", conn_id)
+            else:
+                await send_confirm(chat_id, "🖋 Авто-шрифт <b>выключен</b>", conn_id)
+            return
 
         # ---- .mute ----
         if cmd == ".mute":
@@ -1311,14 +1369,12 @@ async def business_msg(message: types.Message):
                 return
             caption = " ".join(parts[1:]) if len(parts) > 1 else ""
             posted = 0
-            failed = 0
             last_err = ""
             for idx, piece in enumerate(parts_img):
                 ok, err = await post_story(conn_id, piece, f"part_{idx}.jpg", caption)
                 if ok:
                     posted += 1
                 else:
-                    failed += 1
                     last_err = err
                     logging.error(f"postStory {idx}: {err}")
                 await asyncio.sleep(0.7)
@@ -1493,12 +1549,9 @@ async def pm_commands(message: types.Message):
 
     if text == ".help":
         await message.answer(
-            "📖 <b>Команды в личке бота:</b>\n\n"
-            "<code>.mute @user N</code> — мут на N мин\n"
-            "<code>.unmute @user</code> — снять мут\n"
-            "<code>.warn @user N</code> — варны\n"
-            "<code>.unwarn @user</code> — сбросить\n\n"
-            "⚠️ Вместо @user можно ID.",
+            "📖 <b>Команды в личке:</b>\n\n"
+            "<code>.mute @user N</code> — мут\n"
+            "<code>.unmute @user</code> — снять мут\n",
             parse_mode="HTML")
         return
 
