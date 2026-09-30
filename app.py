@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 AntiSpam Defender Bot — Business-бот.
-+ .type on/off — авто-шрифт для твоих сообщений.
++ .type on/off — авто-шрифт.
++ .spam задержка 0.15 сек.
 """
 
 import os
@@ -104,7 +105,7 @@ ttt_games = {}
 wordle_games = {}
 processed_updates = {}
 deleted_by_bot = set()
-type_styles = {}   # {chat_id: "bold"} — авто-шрифт по чату
+type_styles = {}
 
 
 # ================== СТИЛИ ==================
@@ -930,20 +931,16 @@ async def business_msg(message: types.Message):
                 logging.error(f"echo: {e}")
             return
 
-        # =========================================================
-        #  АВТО-ШРИФТ: если включён и это моё сообщение (не команда)
-        # =========================================================
+        # АВТО-ШРИФТ
         if is_from_owner and chat_id in type_styles and text and not text.startswith("."):
             style = type_styles.get(chat_id)
             if style and style in TYPE_STYLES:
                 open_tag, close_tag = TYPE_STYLES[style]
-                # Удаляем оригинал
                 try:
                     deleted_by_bot.add(message.message_id)
                     await delete_business_msg(conn_id, [message.message_id])
                 except Exception as e:
                     logging.error(f"type del: {e}")
-                # Отправляем форматированное
                 try:
                     formatted = f"{open_tag}{text}{close_tag}"
                     await bot.send_message(
@@ -954,7 +951,7 @@ async def business_msg(message: types.Message):
                     )
                 except Exception as e:
                     logging.error(f"type send: {e}")
-                return  # дальше не идём — это не команда
+                return
 
         if not text.startswith("."):
             return
@@ -1003,7 +1000,6 @@ async def business_msg(message: types.Message):
                 await delete_cmd(message)
                 await send_confirm(chat_id, f"🖋 <b>Авто-шрифт включён: {style}</b>", conn_id)
                 return
-            # без аргумента — статус
             cur = type_styles.get(chat_id)
             await delete_cmd(message)
             if cur:
@@ -1091,7 +1087,7 @@ async def business_msg(message: types.Message):
             for _ in range(count):
                 try:
                     await bot.send_message(chat_id=chat_id, text=spam_text, business_connection_id=conn_id)
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.15)
                 except Exception as e:
                     logging.error(f"spam: {e}")
                     break
