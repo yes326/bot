@@ -3,6 +3,7 @@
 AntiSpam Defender Bot — Business-бот.
 + .type on/off — авто-шрифт.
 + .spam задержка 0.15 сек.
++ Удаление сообщений замученных собеседников.
 """
 
 import os
@@ -908,6 +909,22 @@ async def business_msg(message: types.Message):
 
         is_incoming = message.from_user and message.from_user.id != owner_id_of_conn
         is_from_owner = message.from_user and message.from_user.id == owner_id_of_conn
+
+        # =========================================================
+        #  ПРОВЕРКА МУТА: если собеседник замучен — удаляем его сообщения
+        # =========================================================
+        if is_incoming:
+            muted_until = mutes.get(message.from_user.id)
+            if not muted_until:
+                muted_until = mutes.get(chat_id)
+            if muted_until and datetime.now() < muted_until:
+                try:
+                    deleted_by_bot.add(message.message_id)
+                    await delete_business_msg(conn_id, [message.message_id])
+                    logging.info(f"🔇 Удалено сообщение замученного (user={message.from_user.id})")
+                except Exception as e:
+                    logging.error(f"mute del: {e}")
+                return  # дальше не обрабатываем
 
         # GHOST
         if ghost_chats.get(chat_id) and is_incoming and not text.startswith("."):
