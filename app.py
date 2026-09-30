@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 AntiSpam Defender Bot — Business-бот.
-fix: story — публикация снизу вверх (правильная сетка 3×3).
+fix: story — публикация снизу вверх + справа налево.
 """
 
 import os
@@ -366,8 +366,8 @@ async def download_file(file_id: str):
 def split_3x3(img_bytes: bytes):
     """
     Режет фото на 9 частей 3×3 для историй.
-    Публикуем в порядке: снизу вверх, слева направо — потому что
-    Telegram выкладывает истории в обратном порядке.
+    Публикуем в порядке: снизу вверх, справа налево —
+    так Telegram собирает сетку правильно.
     """
     from PIL import Image
     try:
@@ -391,9 +391,9 @@ def split_3x3(img_bytes: bytes):
         cell_h = h // 3
 
         parts = []
-        # Снизу вверх (r=2,1,0), слева направо (c=0,1,2)
-        for r in range(2, -1, -1):
-            for c in range(3):
+        # Снизу вверх И справа налево
+        for r in range(2, -1, -1):       # 2, 1, 0
+            for c in range(2, -1, -1):   # 2, 1, 0
                 box = (c * cell_w, r * cell_h, (c + 1) * cell_w, (r + 1) * cell_h)
                 piece = img.crop(box)
                 piece = piece.resize((1080, 1920), Image.LANCZOS)
