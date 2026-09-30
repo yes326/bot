@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 AntiSpam Defender Bot — Business-бот.
-fix: postStory через content JSON + attach://story_photo.
+fix: story — нарезка 9:16 (ровная сетка).
 """
 
 import os
@@ -346,7 +346,6 @@ def cache_message(message):
 
 # ================== STORY: СКАЧИВАНИЕ / НАРЕЗКА / POST ==================
 async def download_file(file_id: str):
-    """Скачивает файл из Telegram по file_id. Возвращает bytes."""
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/getFile"
         async with aiohttp.ClientSession() as session:
@@ -365,21 +364,40 @@ async def download_file(file_id: str):
 
 
 def split_3x3(img_bytes: bytes):
-    """Режет фото на 9 частей 3×3. Возвращает список bytes JPEG."""
+    """
+    Режет фото на 9 частей 3×3 для историй.
+    Общая картинка приводится к 9:16 — каждая часть = 9:16.
+    """
     from PIL import Image
     try:
         img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
         w, h = img.size
-        side = min(w, h)
-        left = (w - side) // 2
-        top = (h - side) // 2
-        img = img.crop((left, top, left + side, top + side))
-        cell = side // 3
+
+        target_ratio = 9 / 16  # 0.5625
+        current_ratio = w / h
+
+        if current_ratio > target_ratio:
+            # Фото слишком широкое — обрезаем по бокам
+            new_w = int(h * target_ratio)
+            left = (w - new_w) // 2
+            img = img.crop((left, 0, left + new_w, h))
+        else:
+            # Фото слишком высокое — обрезаем сверху/снизу
+            new_h = int(w / target_ratio)
+            top = (h - new_h) // 2
+            img = img.crop((0, top, w, top + new_h))
+
+        w, h = img.size
+        cell_w = w // 3
+        cell_h = h // 3
+
         parts = []
         for r in range(3):
             for c in range(3):
-                box = (c * cell, r * cell, (c + 1) * cell, (r + 1) * cell)
+                box = (c * cell_w, r * cell_h, (c + 1) * cell_w, (r + 1) * cell_h)
                 piece = img.crop(box)
+                # Апскейлим до стандарта Stories 1080×1920
+                piece = piece.resize((1080, 1920), Image.LANCZOS)
                 buf = io.BytesIO()
                 piece.save(buf, format="JPEG", quality=95)
                 parts.append(buf.getvalue())
@@ -390,7 +408,6 @@ def split_3x3(img_bytes: bytes):
 
 
 async def post_story(conn_id: str, image_bytes: bytes, filename: str, caption: str = ""):
-    """Публикует одну историю. Возвращает (ok, error_text)."""
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/postStory"
         form = aiohttp.FormData()
@@ -399,10 +416,8 @@ async def post_story(conn_id: str, image_bytes: bytes, filename: str, caption: s
         form.add_field("post_to_chat_page", "true")
         if caption:
             form.add_field("caption", caption[:200])
-        # content — JSON с attach://
         content_json = json.dumps({"type": "photo", "photo": "attach://story_photo"})
         form.add_field("content", content_json)
-        # сам файл — поле "story_photo"
         form.add_field(
             "story_photo",
             image_bytes,
