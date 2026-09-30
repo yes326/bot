@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 AntiSpam Defender Bot — Business-бот.
-nonmute выключен по умолчанию. Добавлена команда .story.
+nonmute выключен по умолчанию. .story через aiohttp.FormData.
 """
 
 import os
@@ -343,7 +343,7 @@ def cache_message(message):
         logging.error(f"cache_message: {e}")
 
 
-# ================== STORY: НАРЕЗКА И СКАЧИВАНИЕ ==================
+# ================== STORY: СКАЧИВАНИЕ И НАРЕЗКА ==================
 async def download_file(file_id: str):
     """Скачивает файл из Telegram по file_id. Возвращает bytes."""
     try:
@@ -386,6 +386,32 @@ def split_3x3(img_bytes: bytes):
     except Exception as e:
         logging.error(f"split_3x3: {e}")
         return []
+
+
+async def post_story(conn_id: str, image_bytes: bytes, filename: str, caption: str = ""):
+    """Публикует одну историю. Возвращает (ok, error_text)."""
+    try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/postStory"
+        form = aiohttp.FormData()
+        form.add_field("business_connection_id", conn_id)
+        form.add_field("active_period", "86400")
+        form.add_field("post_to_chat_page", "true")
+        if caption:
+            form.add_field("caption", caption[:200])
+        form.add_field(
+            "content",
+            image_bytes,
+            filename=filename,
+            content_type="image/jpeg",
+        )
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, data=form) as r:
+                res = await r.json()
+                if res.get("ok"):
+                    return True, ""
+                return False, res.get("description", "unknown")
+    except Exception as e:
+        return False, str(e)
 
 
 # ================== КАЛЬКУЛЯТОР ==================
@@ -1269,32 +1295,14 @@ async def business_msg(message: types.Message):
             failed = 0
             last_err = ""
             for idx, piece in enumerate(parts_img):
-                try:
-                    url = f"https://api.telegram.org/bot{BOT_TOKEN}/postStory"
-                    data = {
-                        "business_connection_id": conn_id,
-                        "active_period": 86400,
-                        "post_to_chat_page": "true",
-                    }
-                    if caption:
-                        data["caption"] = caption[:200]
-                    files = {
-                        "content": (f"part_{idx}.jpg", piece, "image/jpeg"),
-                    }
-                    async with aiohttp.ClientSession() as session:
-                        async with session.post(url, data=data, files=files) as r:
-                            res = await r.json()
-                            if res.get("ok"):
-                                posted += 1
-                            else:
-                                failed += 1
-                                last_err = res.get("description", "")
-                                logging.error(f"postStory {idx}: {res}")
-                    await asyncio.sleep(0.7)
-                except Exception as e:
+                ok, err = await post_story(conn_id, piece, f"part_{idx}.jpg", caption)
+                if ok:
+                    posted += 1
+                else:
                     failed += 1
-                    last_err = str(e)
-                    logging.error(f"postStory {idx}: {e}")
+                    last_err = err
+                    logging.error(f"postStory {idx}: {err}")
+                await asyncio.sleep(0.7)
             if posted == 0 and last_err:
                 await send_confirm(chat_id, f"❌ Ошибка: <code>{last_err[:150]}</code>", conn_id)
             else:
