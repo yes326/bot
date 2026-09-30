@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 AntiSpam Defender Bot — Business-бот.
-Fix: nonmute не восстанавливает команды, которые удалил сам бот.
+nonmute по умолчанию ВЫКЛЮЧЕН. Восстановление только после .nonmute on.
 """
 
 import os
@@ -94,7 +94,7 @@ warn_messages = {}
 referrals = {}
 username_cache = {}
 last_conn_by_chat = {}
-nonmute_active = {}
+nonmute_active = {}  # по умолчанию ВЫКЛЮЧЕН — включается только .nonmute on
 bot_rate = defaultdict(list)
 echo_chats = {}
 ghost_chats = {}
@@ -102,7 +102,7 @@ rps_games = {}
 ttt_games = {}
 wordle_games = {}
 processed_updates = {}
-deleted_by_bot = set()  # message_ids, которые бот удалил сам — не восстанавливать
+deleted_by_bot = set()
 
 
 # ================== БАЗА ==================
@@ -714,7 +714,7 @@ async def on_business_connection(conn: types.BusinessConnection):
         logging.error(f"on_business_connection: {e}")
 
 
-# ================== NONMUTE ==================
+# ================== NONMUTE (по умолчанию ВЫКЛЮЧЕН) ==================
 @dp.deleted_business_messages()
 async def on_deleted_messages(event: types.BusinessMessagesDeleted):
     try:
@@ -725,7 +725,9 @@ async def on_deleted_messages(event: types.BusinessMessagesDeleted):
         if not owner_id_of_conn:
             return
 
-        if nonmute_active.get(chat_id, True) is False:
+        # ВАЖНО: nonmute работает ТОЛЬКО после .nonmute on
+        if nonmute_active.get(chat_id, False) is not True:
+            logging.info(f"⏸ nonmute выключен в чате {chat_id}")
             return
 
         cached = message_cache.get(chat_id, {})
@@ -733,13 +735,17 @@ async def on_deleted_messages(event: types.BusinessMessagesDeleted):
             return
 
         for msg_id in event.message_ids:
-            # Пропускаем удаления, инициированные ботом (delete_cmd, auto_delete)
             if msg_id in deleted_by_bot:
                 deleted_by_bot.discard(msg_id)
                 logging.info(f"⏭ Пропуск восстановления (удалено ботом): {msg_id}")
                 continue
             data = cached.get(msg_id)
             if not data:
+                continue
+            # Не восстанавливать команды (начинаются с .)
+            txt = (data.get("text") or "").strip()
+            if txt.startswith("."):
+                logging.info(f"⏭ Пропуск восстановления команды: {txt[:30]}")
                 continue
             try:
                 if data.get("text"):
@@ -780,6 +786,7 @@ async def business_msg(message: types.Message):
         if not owner_id_of_conn:
             return
 
+        # Дедупликация
         if message.from_user:
             if is_duplicate(chat_id, message.from_user.id, text):
                 logging.info(f"⏭ Дубль апдейта: {text[:30]}")
