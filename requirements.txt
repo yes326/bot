@@ -1,6 +1,788 @@
-aiogram==3.15.0
-aiosqlite
-aiohttp
-flask
-qrcode[pil]
-Pillow
+# -*- coding: utf-8 -*-
+"""
+AntiSpam Defender Bot — Business-бот.
+Волна 1: .dl, .txt, .price, .rps, .ttt, .wordle, .ghost
+"""
+
+import os
+import logging
+import threading
+import asyncio
+import aiohttp
+import time
+import io
+import ast
+import operator
+import random
+import json
+import aiosqlite
+import qrcode
+from datetime import datetime, timedelta
+from collections import defaultdict
+from flask import Flask
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.methods import SetMyName
+from aiogram.types import BufferedInputFile
+
+# ================== НАСТРОЙКИ ==================
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+CARD_NUMBER = "2204320449407461"
+OWNER_USERNAME = "ysorn"
+OWNER_ID = 8502858396
+
+CHANNEL_LINK = "https://t.me/+MV9rTn9A6L1hNGNi"
+CHANNEL_ID = -1004412177691
+
+PRICES = {
+    "1month": {"rub": 100, "days": 30, "label": "1 месяц"},
+    "6months": {"rub": 599, "days": 180, "label": "6 месяцев"},
+    "1year": {"rub": 1199, "days": 365, "label": "1 год"},
+}
+TRIAL_DAYS = 7
+WARN_LIMIT = 5
+WARN_MUTE_MINUTES = 60
+
+BOT_RATE_LIMIT = 5
+BOT_RATE_WINDOW = 60
+
+ZWSP = "\u200b"
+ZWNJ = "\u200c"
+ZWJ  = "\u200d"
+INVISIBLES = [ZWSP, ZWNJ, ZWJ]
+
+SIMILAR = {
+    'а': 'a', 'е': 'e', 'о': 'o', 'р': 'p', 'с': 'c', 'у': 'y',
+    'х': 'x', 'А': 'A', 'В': 'B', 'Е': 'E', 'К': 'K', 'М': 'M',
+    'Н': 'H', 'О': 'O', 'Р': 'P', 'С': 'C', 'Т': 'T', 'У': 'Y',
+    'Х': 'X', 'і': 'i', 'ї': 'i', 'ё': 'e',
+    'б': '6', 'з': '3', 'в': 'b', 'г': 'r', 'д': 'd',
+    'л': 'l', 'м': 'm', 'н': 'n', 'п': 'n', 'ф': 'f',
+    'ц': 'u', 'ч': '4', 'ш': 'w', 'щ': 'w', 'ы': 'b',
+    'ь': 'b', 'э': 'e', 'ю': 'io', 'я': 'ya',
+    'Б': '6', 'З': '3', 'Г': 'R', 'Д': 'D', 'Л': 'L',
+    'П': 'N', 'Ф': 'F', 'Ц': 'U', 'Ч': '4', 'Ш': 'W',
+    'Щ': 'W', 'Ы': 'B', 'Э': 'E', 'Ю': 'IO', 'Я': 'YA',
+}
+
+DB_PATH = "bot.db"
+NAME_UPDATE_INTERVAL = 86400
+CACHE_LIMIT = 200
+
+BANNER_PATH = os.path.join(os.path.dirname(__file__), "angel.jpg")
+BANNER_FALLBACK = os.path.join(os.path.dirname(__file__), "IMG_20260918_155302_695.jpg")
+
+
+def get_banner_path():
+    if os.path.exists(BANNER_PATH):
+        return BANNER_PATH
+    if os.path.exists(BANNER_FALLBACK):
+        return BANNER_FALLBACK
+    return None
+
+
+# ================== ХРАНИЛИЩА ==================
+business_owners = {}
+subscriptions = {}
+pending_payments = {}
+used_trials = set()
+message_cache = {}
+warns = {}
+mutes = {}
+clone = {}
+warn_messages = {}
+referrals = {}
+username_cache = {}
+last_conn_by_chat = {}
+nonmute_active = {}
+bot_rate = defaultdict(list)
+echo_chats = {}
+ghost_chats = {}       # {chat_id: True} — .ghost
+rps_games = {}         # {chat_id: {...}} — .rps
+ttt_games = {}         # {chat_id: {...}} — .ttt
+wordle_games = {}      # {chat_id: {...}} — .wordle
+
+
+# ================== БАЗА ==================
+async def init_db():
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                username TEXT,
+                first_name TEXT,
+                joined_at TEXT
+            )
+        """)
+        await db.commit()
+
+
+async def register_user(user_id, username, first_name):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO users (user_id, username, first_name, joined_at) VALUES (?,?,?,?)",
+            (user_id, username, first_name, datetime.now().isoformat()),
+        )
+        await db.commit()
+
+
+async def get_total_users():
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT COUNT(*) FROM users")
+        row = await cur.fetchone()
+        return row[0] if row else 0
+
+
+async def get_last_users(limit=10):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM users ORDER BY joined_at DESC LIMIT ?", (limit,))
+        return await cur.fetchall()
+
+
+# ================== FLASK ==================
+flask_app = Flask(__name__)
+
+
+@flask_app.route('/')
+def home():
+    return "Bot is running"
+
+
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    flask_app.run(host='0.0.0.0', port=port)
+
+
+# ================== ИНИЦИАЛИЗАЦИЯ ==================
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher(storage=MemoryStorage())
+
+
+# ================== УТИЛИТЫ ==================
+async def bot_api(method, data):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=data) as resp:
+                result = await resp.json()
+                if not result.get("ok"):
+                    logging.error(f"❌ bot_api({method}): {result}")
+                    return None
+                return result
+    except Exception as e:
+        logging.error(f"❌ bot_api({method}): {type(e).__name__}: {e}")
+        return None
+
+
+async def delete_business_msg(conn_id, message_ids):
+    if not isinstance(message_ids, list):
+        message_ids = [message_ids]
+    return await bot_api("deleteBusinessMessages", {
+        "business_connection_id": conn_id,
+        "message_ids": message_ids,
+    })
+
+
+async def auto_delete(chat_id, message_id, conn_id, seconds=3):
+    await asyncio.sleep(seconds)
+    try:
+        await delete_business_msg(conn_id, [message_id])
+    except Exception as e:
+        logging.error(f"auto_delete failed: {e}")
+
+
+async def delete_cmd(message):
+    if not message.business_connection_id:
+        return
+    try:
+        await delete_business_msg(message.business_connection_id, [message.message_id])
+        logging.info(f"✅ Удалена команда: {(message.text or '')[:30]}")
+    except Exception as e:
+        logging.error(f"❌ Ошибка удаления: {type(e).__name__}: {e}")
+
+
+async def send_confirm(chat_id, text, conn_id, seconds=None, reply_markup=None):
+    try:
+        kwargs = {"chat_id": chat_id, "text": text, "business_connection_id": conn_id, "parse_mode": "HTML"}
+        if reply_markup:
+            kwargs["reply_markup"] = reply_markup
+        msg = await bot.send_message(**kwargs)
+        if seconds is not None:
+            asyncio.create_task(auto_delete(chat_id, msg.message_id, conn_id, seconds))
+        return msg
+    except Exception as e:
+        logging.error(f"send_confirm failed: {e}")
+        return None
+
+
+async def send_photo_banner(chat_id, caption, conn_id=None, reply_markup=None, parse_mode="HTML"):
+    path = get_banner_path()
+    if path:
+        try:
+            kwargs = {
+                "chat_id": chat_id,
+                "photo": types.FSInputFile(path),
+                "caption": caption,
+                "parse_mode": parse_mode,
+            }
+            if reply_markup:
+                kwargs["reply_markup"] = reply_markup
+            if conn_id:
+                kwargs["business_connection_id"] = conn_id
+            return await bot.send_photo(**kwargs)
+        except Exception as e:
+            logging.error(f"send_photo_banner: {e}")
+    try:
+        kwargs = {"chat_id": chat_id, "text": caption, "parse_mode": parse_mode}
+        if reply_markup:
+            kwargs["reply_markup"] = reply_markup
+        if conn_id:
+            kwargs["business_connection_id"] = conn_id
+        return await bot.send_message(**kwargs)
+    except Exception as e:
+        logging.error(f"send_message fallback: {e}")
+        return None
+
+
+async def delete_warn_msg(chat_id):
+    old_msg_id = warn_messages.get(chat_id)
+    conn_id = last_conn_by_chat.get(chat_id)
+    if old_msg_id and conn_id:
+        try:
+            await delete_business_msg(conn_id, [old_msg_id])
+        except Exception as e:
+            logging.error(f"del warn msg: {e}")
+    warn_messages.pop(chat_id, None)
+
+
+def distort(text, level=3):
+    if not text:
+        return text
+    result = []
+    for i, ch in enumerate(text):
+        if ch in SIMILAR:
+            result.append(SIMILAR[ch])
+        else:
+            result.append(ch)
+        if i % 2 == 0:
+            result.append(INVISIBLES[i % len(INVISIBLES)])
+    distorted = "".join(result)
+    if len(distorted) > 4000:
+        distorted = distorted[:4000]
+    return distorted
+
+
+def cache_message(message):
+    try:
+        chat_id = message.chat.id
+        if chat_id not in message_cache:
+            message_cache[chat_id] = {}
+        entry = {
+            "from_id": message.from_user.id if message.from_user else None,
+            "from_name": message.from_user.full_name if message.from_user else "?",
+            "text": message.text or message.caption,
+            "photo": message.photo[-1].file_id if message.photo else None,
+            "video": message.video.file_id if message.video else None,
+            "video_note": message.video_note.file_id if message.video_note else None,
+            "voice": message.voice.file_id if message.voice else None,
+            "audio": message.audio.file_id if message.audio else None,
+            "document": message.document.file_id if message.document else None,
+            "sticker": message.sticker.file_id if message.sticker else None,
+            "animation": message.animation.file_id if message.animation else None,
+            "date": message.date.isoformat() if message.date else None,
+        }
+        message_cache[chat_id][message.message_id] = entry
+        if len(message_cache[chat_id]) > CACHE_LIMIT:
+            sorted_ids = sorted(message_cache[chat_id].keys())
+            for old_id in sorted_ids[:len(sorted_ids) - CACHE_LIMIT]:
+                message_cache[chat_id].pop(old_id, None)
+    except Exception as e:
+        logging.error(f"cache_message: {e}")
+
+
+# ================== КАЛЬКУЛЯТОР ==================
+_SAFE_OPS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.Pow: operator.pow,
+    ast.Mod: operator.mod,
+    ast.USub: operator.neg,
+    ast.UAdd: operator.pos,
+    ast.FloorDiv: operator.floordiv,
+}
+
+
+def _safe_eval(node):
+    if isinstance(node, ast.Expression):
+        return _safe_eval(node.body)
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, (int, float)):
+            return node.value
+        raise ValueError("Только числа")
+    if isinstance(node, ast.BinOp):
+        op = _SAFE_OPS.get(type(node.op))
+        if not op:
+            raise ValueError("Операция запрещена")
+        return op(_safe_eval(node.left), _safe_eval(node.right))
+    if isinstance(node, ast.UnaryOp):
+        op = _SAFE_OPS.get(type(node.op))
+        if not op:
+            raise ValueError("Операция запрещена")
+        return op(_safe_eval(node.operand))
+    raise ValueError("Выражение не поддерживается")
+
+
+def calc_expr(expr: str):
+    try:
+        tree = ast.parse(expr, mode="eval")
+        result = _safe_eval(tree)
+        if isinstance(result, float) and (result != result or abs(result) == float("inf")):
+            return None
+        return result
+    except Exception:
+        return None
+
+
+# ================== КУРСЫ ВАЛЮТ ==================
+async def fetch_prices() -> str:
+    """Возвращает текст с курсами USDT, USD, TON, CNY, EUR к рублю."""
+    lines = ["💱 <b>Курсы валют к рублю</b>", "━━━━━━━━━━━━━━━━━━━━"]
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+            # ЦБ РФ — официальные курсы USD, EUR, CNY
+            async with session.get("https://www.cbr-xml-daily.ru/daily_json.js") as r:
+                data = await r.json()
+                usd = data["Valute"]["USD"]["Value"]
+                eur = data["Valute"]["EUR"]["Value"]
+                cny = data["Valute"]["CNY"]["Value"]
+                lines.append(f"🇺🇸 USD: <b>{usd:.2f}₽</b>")
+                lines.append(f"🇪🇺 EUR: <b>{eur:.2f}₽</b>")
+                lines.append(f"🇨🇳 CNY: <b>{cny:.2f}₽</b>")
+
+            # CoinGecko — USDT и TON
+            try:
+                url = "https://api.coingecko.com/api/v3/simple/price?ids=tether,the-open-network&vs_currencies=rub"
+                async with session.get(url) as r:
+                    d = await r.json()
+                    if "tether" in d:
+                        lines.append(f"💵 USDT: <b>{d['tether']['rub']:.2f}₽</b>")
+                    if "the-open-network" in d:
+                        lines.append(f"💎 TON (GRAM): <b>{d['the-open-network']['rub']:.2f}₽</b>")
+            except Exception as e:
+                logging.error(f"coingecko: {e}")
+    except Exception as e:
+        logging.error(f"cbr: {e}")
+        return "❌ Не удалось получить курсы"
+    lines.append("━━━━━━━━━━━━━━━━━━━━")
+    return "\n".join(lines)
+
+
+# ================== КАМЕНЬ-НОЖНИЦЫ-БУМАГА ==================
+RPS_CHOICES = {"к": "камень", "н": "ножницы", "б": "бумага"}
+RPS_WINS = {"камень": "ножницы", "ножницы": "бумага", "бумага": "камень"}
+
+
+def rps_result(player: str, bot_choice: str) -> str:
+    if player == bot_choice:
+        return "🤝 Ничья!"
+    if RPS_WINS[player] == bot_choice:
+        return "🎉 Ты победил!"
+    return "😢 Ты проиграл!"
+
+
+# ================== КРЕСТИКИ-НОЛИКИ ==================
+TTT_EMPTY = "⬜"
+TTT_X = "❌"
+TTT_O = "⭕"
+
+
+def ttt_board_kb(chat_id: int):
+    game = ttt_games.get(chat_id)
+    if not game:
+        return None
+    board = game["board"]
+    rows = []
+    for r in range(3):
+        row = []
+        for c in range(3):
+            idx = r * 3 + c
+            label = board[idx] if board[idx] != " " else "·"
+            row.append(types.InlineKeyboardButton(text=label, callback_data=f"ttt_{idx}"))
+        rows.append(row)
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def ttt_check_winner(board):
+    lines = [
+        [0,1,2],[3,4,5],[6,7,8],
+        [0,3,6],[1,4,7],[2,5,8],
+        [0,4,8],[2,4,6],
+    ]
+    for a,b,c in lines:
+        if board[a] != " " and board[a] == board[b] == board[c]:
+            return board[a]
+    if " " not in board:
+        return "draw"
+    return None
+
+
+# ================== WORDLE ==================
+def wordle_render(game) -> str:
+    out = ["🎯 <b>Wordle</b>", "━━━━━━━━━━━━━━━━━━━━",
+           f"Слово из <b>{len(game['word'])}</b> букв. Попыток: <b>{game['tries']}</b>", ""]
+    for guess, marks in game["history"]:
+        line = ""
+        for i, ch in enumerate(guess):
+            if marks[i] == "G":
+                line += f"🟩{ch.upper()}"
+            elif marks[i] == "Y":
+                line += f"🟨{ch.upper()}"
+            else:
+                line += f"⬜{ch.upper()}"
+        out.append(line)
+    out.append("")
+    out.append("━━━━━━━━━━━━━━━━━━━━")
+    return "\n".join(out)
+
+
+def wordle_marks(word: str, guess: str) -> str:
+    marks = ["B"] * len(word)
+    used = [False] * len(word)
+    for i in range(len(word)):
+        if guess[i] == word[i]:
+            marks[i] = "G"
+            used[i] = True
+    for i in range(len(word)):
+        if marks[i] == "G":
+            continue
+        for j in range(len(word)):
+            if not used[j] and guess[i] == word[j]:
+                marks[i] = "Y"
+                used[j] = True
+                break
+    return "".join(marks)
+
+
+# ================== ФОНОВАЯ ЗАДАЧА ==================
+async def update_bot_name():
+    try:
+        total = await get_total_users()
+        new_name = f"AntiSpam Defender | {total}"
+        if len(new_name) > 64:
+            new_name = f"AntiSpam | {total}"
+        await bot(SetMyName(name=new_name))
+        logging.info(f"🏷 Имя бота: {new_name}")
+    except Exception as e:
+        logging.error(f"❌ Ошибка обновления имени: {e}")
+
+
+async def background_name_updater():
+    await asyncio.sleep(60)
+    await update_bot_name()
+    while True:
+        await asyncio.sleep(NAME_UPDATE_INTERVAL)
+        await update_bot_name()
+
+
+# ================== ПОДПИСКА ==================
+async def check_subscription(user_id):
+    try:
+        member = await bot.get_chat_member(CHANNEL_ID, user_id)
+        return member.status not in ("left", "kicked")
+    except Exception as e:
+        logging.error(f"sub check: {e}")
+        return True
+
+
+def subscribe_kb():
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="📢 Подписаться на канал", url=CHANNEL_LINK)],
+        [types.InlineKeyboardButton(text="✅ Я подписался", callback_data="check_sub")],
+    ])
+
+
+# ================== ВЛАДЕЛЕЦ ==================
+async def get_owner_id(conn_id):
+    if not conn_id:
+        return None
+    if conn_id in business_owners:
+        return business_owners[conn_id]
+    try:
+        conn = await bot.get_business_connection(conn_id)
+        business_owners[conn_id] = conn.user.id
+        return conn.user.id
+    except Exception as e:
+        logging.error(f"get_owner_id: {e}")
+        return None
+
+
+async def find_connection_by_target(target):
+    target = target.strip().lstrip("@").lower()
+    if target in username_cache:
+        uid = username_cache[target]
+        conn = last_conn_by_chat.get(uid)
+        if conn:
+            return conn, uid
+    try:
+        target_id = int(target)
+        conn = last_conn_by_chat.get(target_id)
+        if conn:
+            return conn, target_id
+    except ValueError:
+        pass
+    return None, None
+
+
+# ================== КЛАВИАТУРЫ ==================
+def main_menu():
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="📖 Команды бота", callback_data="cmd_list")],
+        [types.InlineKeyboardButton(text="💎 Подписка", callback_data="sub_menu")],
+        [types.InlineKeyboardButton(text="👥 Пригласить друга", callback_data="ref")],
+        [types.InlineKeyboardButton(text="📚 Как подключить", callback_data="howto")],
+    ])
+
+
+def back_kb():
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="🔙 В меню", callback_data="back_main")]
+    ])
+
+
+def plans_kb(user_id=None):
+    rows = []
+    if user_id is not None and user_id not in used_trials:
+        rows.append([types.InlineKeyboardButton(text=f"🎁 Пробный период ({TRIAL_DAYS} дней)", callback_data="trial")])
+    for k, v in PRICES.items():
+        rows.append([types.InlineKeyboardButton(text=f"{v['label']} — {v['rub']}₽", callback_data=f"pay_{k}")])
+    rows.append([types.InlineKeyboardButton(text="🔙 Назад", callback_data="back_main")])
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+# ================== ТЕКСТЫ ==================
+TEXT_MAIN_MENU = (
+    "🏠 <b>Главное меню</b>\n"
+    "━━━━━━━━━━━━━━━━━━━━\n"
+    "🛡 <b>AntiSpam Defender</b> — защита\n"
+    "ваших бизнес-чатов от спама\n"
+    "и нежелательных сообщений.\n"
+    "━━━━━━━━━━━━━━━━━━━━\n"
+    "👇 <i>Выбери действие:</i>"
+)
+
+TEXT_CMD_LIST = (
+    "📖 <b>Команды бота</b>\n"
+    "━━━━━━━━━━━━━━━━━━━━\n\n"
+    "🛡 <b>Модерация</b>\n"
+    "• <code>.mute N</code> — мут на N мин\n"
+    "• <code>.unmute</code> — снять мут\n"
+    "• <code>.warn N</code> — предупреждения\n"
+    "• <code>.unwarn</code> — сбросить\n"
+    "• <code>.spam N текст</code> — спам\n"
+    "• <code>.nonmute on/off</code> — обход мута\n\n"
+    "🎮 <b>Развлечения</b>\n"
+    "• <code>.info</code> — данные собеседника\n"
+    "• <code>.st текст</code> — текст по словам\n"
+    "• <code>.calc 5*5</code> — калькулятор\n"
+    "• <code>.qr текст</code> — QR-код\n"
+    "• <code>.clone on/off</code> — автоповтор\n"
+    "• <code>.echo on/off</code> — эхо\n"
+    "• <code>.dl N текст</code> — автоудаление\n"
+    "• <code>.txt текст</code> — анимация печати\n"
+    "• <code>.rps</code> — камень-ножницы-бумага\n"
+    "• <code>.ttt</code> — крестики-нолики\n"
+    "• <code>.wordle слово</code> — угадай слово\n\n"
+    "💱 <b>Полезное</b>\n"
+    "• <code>.price</code> — курсы валют\n\n"
+    "👻 <b>Приватность</b>\n"
+    "• <code>.ghost on/off</code> — копия входящих в ЛС\n\n"
+    "📸 <b>Медиа</b>\n"
+    "• Ответ на медиа → одноразовое фото в ЛС\n"
+    "━━━━━━━━━━━━━━━━━━━━"
+)
+
+TEXT_HOWTO = (
+    "📚 <b>Как подключить</b>\n"
+    "━━━━━━━━━━━━━━━━━━━━\n\n"
+    "1️⃣ Открой <b>Настройки</b>\n"
+    "2️⃣ Перейди в <b>Аккаунт</b>\n"
+    "3️⃣ Найди <b>Автоматизация чатов</b>\n"
+    "4️⃣ Выбери <b>AntiSpam Defender</b>\n\n"
+    "✅ <b>Разрешения:</b>\n"
+    "• Чтение сообщений\n"
+    "• Ответы на сообщения\n"
+    "• Удаление сообщений\n\n"
+    "💬 Пиши команды <b>в бизнес-чате</b>:\n"
+    "<code>.mute 10</code>\n"
+    "━━━━━━━━━━━━━━━━━━━━"
+)
+
+TEXT_REF = (
+    "👥 <b>Пригласить друга</b>\n"
+    "━━━━━━━━━━━━━━━━━━━━\n\n"
+    "🎁 За каждого друга — <b>+3 дня</b> к подписке!\n\n"
+    "🔗 <b>Твоя ссылка:</b>\n<code>{link}</code>\n\n"
+    "📊 <b>Приглашено:</b> {count}\n"
+    "━━━━━━━━━━━━━━━━━━━━"
+)
+
+
+# ================== /START ==================
+@dp.message(F.text == "/start")
+async def start_cmd(message):
+    user_id = message.from_user.id
+    await register_user(user_id, message.from_user.username or "", message.from_user.first_name or "")
+    total = await get_total_users()
+    logging.info(f"👤 /start от {user_id} | всего: {total}")
+
+    args = message.text.split()
+    if len(args) > 1 and args[1].startswith("ref_"):
+        try:
+            referrer_id = int(args[1][4:])
+            if referrer_id != user_id:
+                referrals.setdefault(referrer_id, set()).add(user_id)
+                now = datetime.now()
+                current = subscriptions.get(referrer_id, now)
+                subscriptions[referrer_id] = max(current, now) + timedelta(days=3)
+                try:
+                    await bot.send_message(referrer_id,
+                        "🎁 <b>Новый друг присоединился!</b>\n+3 дня к подписке.", parse_mode="HTML")
+                except: pass
+        except ValueError: pass
+
+    if not await check_subscription(user_id):
+        await message.answer(
+            "⚠️ <b>Для использования бота нужно подписаться на наш канал.</b>\n\n"
+            "📢 Подпишись и нажми «✅ Я подписался».",
+            parse_mode="HTML", reply_markup=subscribe_kb())
+        return
+
+    await send_photo_banner(message.chat.id, TEXT_MAIN_MENU, reply_markup=main_menu())
+
+
+# ================== /STATS ==================
+@dp.message(F.text == "/stats", F.from_user.id == OWNER_ID)
+async def stats_cmd(message):
+    total = await get_total_users()
+    with_sub = sum(1 for u in subscriptions if subscriptions[u] > datetime.now())
+    trials = len(used_trials)
+    last_users = await get_last_users(10)
+    text = (
+        "📊 <b>Статистика бота</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"👥 Пользователей: <b>{total}</b>\n"
+        f"💎 Подписок: <b>{with_sub}</b>\n"
+        f"🎁 Триалов: <b>{trials}</b>\n\n"
+        "🕐 <b>Последние 10:</b>\n"
+    )
+    for row in last_users:
+        name = row["first_name"] or row["username"] or str(row["user_id"])
+        uname = f"@{row['username']}" if row["username"] else ""
+        text += f"• {name} {uname} (<code>{row['user_id']}</code>)\n"
+    text += "━━━━━━━━━━━━━━━━━━━━"
+    await message.answer(text, parse_mode="HTML")
+
+
+# ================== БИЗНЕС-ПОДКЛЮЧЕНИЕ ==================
+@dp.business_connection()
+async def on_business_connection(conn: types.BusinessConnection):
+    try:
+        business_owners[conn.id] = conn.user.id
+        username_cache[(conn.user.username or "").lower()] = conn.user.id
+        last_conn_by_chat[conn.user.id] = conn.id
+        logging.info(f"🔗 Business connection: {conn.id} owner={conn.user.id} @{conn.user.username}")
+    except Exception as e:
+        logging.error(f"on_business_connection: {e}")
+
+
+# ================== NONMUTE / ВОССТАНОВЛЕНИЕ ==================
+@dp.deleted_business_messages()
+async def on_deleted_messages(event: types.BusinessMessagesDeleted):
+    try:
+        chat_id = event.chat.id
+        conn_id = event.business_connection_id
+
+        owner_id_of_conn = await get_owner_id(conn_id)
+        if owner_id_of_conn != OWNER_ID:
+            return
+
+        if nonmute_active.get(chat_id, True) is False:
+            return
+
+        cached = message_cache.get(chat_id, {})
+        if not cached:
+            return
+
+        for msg_id in event.message_ids:
+            data = cached.get(msg_id)
+            if not data:
+                continue
+            try:
+                if data.get("text"):
+                    await bot.send_message(chat_id=chat_id, text=data["text"], business_connection_id=conn_id)
+                elif data.get("photo"):
+                    await bot.send_photo(chat_id=chat_id, photo=data["photo"], business_connection_id=conn_id)
+                elif data.get("video"):
+                    await bot.send_video(chat_id=chat_id, video=data["video"], business_connection_id=conn_id)
+                elif data.get("video_note"):
+                    await bot.send_video_note(chat_id=chat_id, video_note=data["video_note"], business_connection_id=conn_id)
+                elif data.get("voice"):
+                    await bot.send_voice(chat_id=chat_id, voice=data["voice"], business_connection_id=conn_id)
+                elif data.get("audio"):
+                    await bot.send_audio(chat_id=chat_id, audio=data["audio"], business_connection_id=conn_id)
+                elif data.get("document"):
+                    await bot.send_document(chat_id=chat_id, document=data["document"], business_connection_id=conn_id)
+                elif data.get("sticker"):
+                    await bot.send_sticker(chat_id=chat_id, sticker=data["sticker"], business_connection_id=conn_id)
+                elif data.get("animation"):
+                    await bot.send_animation(chat_id=chat_id, animation=data["animation"], business_connection_id=conn_id)
+                logging.info(f"♻️ Восстановлено сообщение {msg_id} в чате {chat_id}")
+            except Exception as e:
+                logging.error(f"restore {msg_id}: {e}")
+            await asyncio.sleep(0.3)
+    except Exception as e:
+        logging.error(f"on_deleted_messages: {type(e).__name__}: {e}")
+
+
+# ================== БИЗНЕС-СООБЩЕНИЯ ==================
+@dp.business_message()
+async def business_msg(message: types.Message):
+    try:
+        text = message.text or ""
+        chat_id = message.chat.id
+        conn_id = message.business_connection_id
+
+        # Только своё подключение
+        owner_id_of_conn = await get_owner_id(conn_id)
+        if owner_id_of_conn != OWNER_ID:
+            return
+
+        cache_message(message)
+
+        if message.from_user:
+            last_conn_by_chat[message.from_user.id] = conn_id
+            if message.from_user.username:
+                username_cache[message.from_user.username.lower()] = message.from_user.id
+
+        is_incoming = message.from_user and message.from_user.id != OWNER_ID
+
+        # ===== GHOST: копируем входящие владельцу =====
+        if ghost_chats.get(chat_id) and is_incoming and not text.startswith("."):
+            try:
+                user = message.from_user
+                fwd = (
+                    f"👻 <b>Ghost</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"👤 @{user.username or user.full_name} (<code>{user.id}</code>)\n"
+                    f"📝 <code>{(message.text or '[медиа]')[:500]}</code>"
+                )
+                await bot.send_message(OWNER_ID, fwd, parse_mode="HTML")
+            except Exception as e:
+                logging.error(f"ghost: {e}")
+
+        # Эхо — только для входящих не-команд
+        if echo_chats.get(chat_id) and is_incoming
