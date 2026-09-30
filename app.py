@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 AntiSpam Defender Bot — Business-бот.
-fix: story — нарезка 9:16 (ровная сетка).
+fix: story — публикация снизу вверх (правильная сетка 3×3).
 """
 
 import os
@@ -344,7 +344,7 @@ def cache_message(message):
         logging.error(f"cache_message: {e}")
 
 
-# ================== STORY: СКАЧИВАНИЕ / НАРЕЗКА / POST ==================
+# ================== STORY ==================
 async def download_file(file_id: str):
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/getFile"
@@ -366,23 +366,22 @@ async def download_file(file_id: str):
 def split_3x3(img_bytes: bytes):
     """
     Режет фото на 9 частей 3×3 для историй.
-    Общая картинка приводится к 9:16 — каждая часть = 9:16.
+    Публикуем в порядке: снизу вверх, слева направо — потому что
+    Telegram выкладывает истории в обратном порядке.
     """
     from PIL import Image
     try:
         img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
         w, h = img.size
 
-        target_ratio = 9 / 16  # 0.5625
+        target_ratio = 9 / 16
         current_ratio = w / h
 
         if current_ratio > target_ratio:
-            # Фото слишком широкое — обрезаем по бокам
             new_w = int(h * target_ratio)
             left = (w - new_w) // 2
             img = img.crop((left, 0, left + new_w, h))
         else:
-            # Фото слишком высокое — обрезаем сверху/снизу
             new_h = int(w / target_ratio)
             top = (h - new_h) // 2
             img = img.crop((0, top, w, top + new_h))
@@ -392,11 +391,11 @@ def split_3x3(img_bytes: bytes):
         cell_h = h // 3
 
         parts = []
-        for r in range(3):
+        # Снизу вверх (r=2,1,0), слева направо (c=0,1,2)
+        for r in range(2, -1, -1):
             for c in range(3):
                 box = (c * cell_w, r * cell_h, (c + 1) * cell_w, (r + 1) * cell_h)
                 piece = img.crop(box)
-                # Апскейлим до стандарта Stories 1080×1920
                 piece = piece.resize((1080, 1920), Image.LANCZOS)
                 buf = io.BytesIO()
                 piece.save(buf, format="JPEG", quality=95)
@@ -479,7 +478,7 @@ def calc_expr(expr: str):
         return None
 
 
-# ================== КУРСЫ ВАЛЮТ ==================
+# ================== КУРСЫ ==================
 async def fetch_prices() -> str:
     lines = ["💱 <b>Курсы валют к рублю</b>", "━━━━━━━━━━━━━━━━━━━━"]
     try:
@@ -1414,7 +1413,7 @@ async def onetime_media(message: types.Message):
         logging.error(f"onetime_media: {e}")
 
 
-# ================== CALLBACKS: RPS / TTT ==================
+# ================== CALLBACKS ==================
 @dp.callback_query(F.data.startswith("rps_"))
 async def cb_rps(call):
     parts = call.data.split("_")
@@ -1530,7 +1529,7 @@ async def pm_commands(message: types.Message):
         return
 
 
-# ================== CALLBACKS ==================
+# ================== CALLBACKS МЕНЮ ==================
 @dp.callback_query(F.data == "check_sub")
 async def cb_check_sub(call):
     if await check_subscription(call.from_user.id):
