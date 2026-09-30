@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 AntiSpam Defender Bot — Business-бот.
-Обработка ТОЛЬКО своего подключения (owner = OWNER_ID). Без дублей.
+Волна 1: .dl, .txt, .price, .rps, .ttt, .wordle, .ghost
++ команды доступны ВСЕМ, кто подписан на канал и подключил бота.
 """
 
 import os
@@ -13,6 +14,7 @@ import time
 import io
 import ast
 import operator
+import random
 import aiosqlite
 import qrcode
 from datetime import datetime, timedelta
@@ -95,6 +97,10 @@ last_conn_by_chat = {}
 nonmute_active = {}
 bot_rate = defaultdict(list)
 echo_chats = {}
+ghost_chats = {}
+rps_games = {}
+ttt_games = {}
+wordle_games = {}
 
 
 # ================== БАЗА ==================
@@ -197,9 +203,12 @@ async def delete_cmd(message):
         logging.error(f"❌ Ошибка удаления: {type(e).__name__}: {e}")
 
 
-async def send_confirm(chat_id, text, conn_id, seconds=None):
+async def send_confirm(chat_id, text, conn_id, seconds=None, reply_markup=None):
     try:
-        msg = await bot.send_message(chat_id, text, business_connection_id=conn_id, parse_mode="HTML")
+        kwargs = {"chat_id": chat_id, "text": text, "business_connection_id": conn_id, "parse_mode": "HTML"}
+        if reply_markup:
+            kwargs["reply_markup"] = reply_markup
+        msg = await bot.send_message(**kwargs)
         if seconds is not None:
             asyncio.create_task(auto_delete(chat_id, msg.message_id, conn_id, seconds))
         return msg
@@ -293,7 +302,7 @@ def cache_message(message):
         logging.error(f"cache_message: {e}")
 
 
-# ================== БЕЗОПАСНЫЙ КАЛЬКУЛЯТОР ==================
+# ================== КАЛЬКУЛЯТОР ==================
 _SAFE_OPS = {
     ast.Add: operator.add,
     ast.Sub: operator.sub,
@@ -338,6 +347,114 @@ def calc_expr(expr: str):
         return None
 
 
+# ================== КУРСЫ ВАЛЮТ ==================
+async def fetch_prices() -> str:
+    lines = ["💱 <b>Курсы валют к рублю</b>", "━━━━━━━━━━━━━━━━━━━━"]
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+            async with session.get("https://www.cbr-xml-daily.ru/daily_json.js") as r:
+                data = await r.json()
+                usd = data["Valute"]["USD"]["Value"]
+                eur = data["Valute"]["EUR"]["Value"]
+                cny = data["Valute"]["CNY"]["Value"]
+                lines.append(f"🇺🇸 USD: <b>{usd:.2f}₽</b>")
+                lines.append(f"🇪🇺 EUR: <b>{eur:.2f}₽</b>")
+                lines.append(f"🇨🇳 CNY: <b>{cny:.2f}₽</b>")
+            try:
+                url = "https://api.coingecko.com/api/v3/simple/price?ids=tether,the-open-network&vs_currencies=rub"
+                async with session.get(url) as r:
+                    d = await r.json()
+                    if "tether" in d:
+                        lines.append(f"💵 USDT: <b>{d['tether']['rub']:.2f}₽</b>")
+                    if "the-open-network" in d:
+                        lines.append(f"💎 TON (GRAM): <b>{d['the-open-network']['rub']:.2f}₽</b>")
+            except Exception as e:
+                logging.error(f"coingecko: {e}")
+    except Exception as e:
+        logging.error(f"cbr: {e}")
+        return "❌ Не удалось получить курсы"
+    lines.append("━━━━━━━━━━━━━━━━━━━━")
+    return "\n".join(lines)
+
+
+# ================== RPS / TTT / WORDLE ==================
+RPS_WINS = {"камень": "ножницы", "ножницы": "бумага", "бумага": "камень"}
+
+
+def rps_result(player: str, bot_choice: str) -> str:
+    if player == bot_choice:
+        return "🤝 Ничья!"
+    if RPS_WINS[player] == bot_choice:
+        return "🎉 Ты победил!"
+    return "😢 Ты проиграл!"
+
+
+def ttt_board_kb(chat_id: int):
+    game = ttt_games.get(chat_id)
+    if not game:
+        return None
+    board = game["board"]
+    rows = []
+    for r in range(3):
+        row = []
+        for c in range(3):
+            idx = r * 3 + c
+            label = board[idx] if board[idx] != " " else "·"
+            row.append(types.InlineKeyboardButton(text=label, callback_data=f"ttt_{idx}"))
+        rows.append(row)
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def ttt_check_winner(board):
+    lines = [
+        [0,1,2],[3,4,5],[6,7,8],
+        [0,3,6],[1,4,7],[2,5,8],
+        [0,4,8],[2,4,6],
+    ]
+    for a,b,c in lines:
+        if board[a] != " " and board[a] == board[b] == board[c]:
+            return board[a]
+    if " " not in board:
+        return "draw"
+    return None
+
+
+def wordle_render(game) -> str:
+    out = ["🎯 <b>Wordle</b>", "━━━━━━━━━━━━━━━━━━━━",
+           f"Слово из <b>{len(game['word'])}</b> букв. Попыток: <b>{game['tries']}</b>", ""]
+    for guess, marks in game["history"]:
+        line = ""
+        for i, ch in enumerate(guess):
+            if marks[i] == "G":
+                line += f"🟩{ch.upper()}"
+            elif marks[i] == "Y":
+                line += f"🟨{ch.upper()}"
+            else:
+                line += f"⬜{ch.upper()}"
+        out.append(line)
+    out.append("")
+    out.append("━━━━━━━━━━━━━━━━━━━━")
+    return "\n".join(out)
+
+
+def wordle_marks(word: str, guess: str) -> str:
+    marks = ["B"] * len(word)
+    used = [False] * len(word)
+    for i in range(len(word)):
+        if guess[i] == word[i]:
+            marks[i] = "G"
+            used[i] = True
+    for i in range(len(word)):
+        if marks[i] == "G":
+            continue
+        for j in range(len(word)):
+            if not used[j] and guess[i] == word[j]:
+                marks[i] = "Y"
+                used[j] = True
+                break
+    return "".join(marks)
+
+
 # ================== ФОНОВАЯ ЗАДАЧА ==================
 async def update_bot_name():
     try:
@@ -361,6 +478,7 @@ async def background_name_updater():
 
 # ================== ПОДПИСКА ==================
 async def check_subscription(user_id):
+    """Проверка подписки на канал. True — подписан."""
     try:
         member = await bot.get_chat_member(CHANNEL_ID, user_id)
         return member.status not in ("left", "kicked")
@@ -449,7 +567,7 @@ TEXT_CMD_LIST = (
     "📖 <b>Команды бота</b>\n"
     "━━━━━━━━━━━━━━━━━━━━\n\n"
     "🛡 <b>Модерация</b>\n"
-    "• <code>.mute N</code> — замутить на N мин\n"
+    "• <code>.mute N</code> — мут на N мин\n"
     "• <code>.unmute</code> — снять мут\n"
     "• <code>.warn N</code> — предупреждения\n"
     "• <code>.unwarn</code> — сбросить\n"
@@ -461,7 +579,16 @@ TEXT_CMD_LIST = (
     "• <code>.calc 5*5</code> — калькулятор\n"
     "• <code>.qr текст</code> — QR-код\n"
     "• <code>.clone on/off</code> — автоповтор\n"
-    "• <code>.echo on/off</code> — эхо\n\n"
+    "• <code>.echo on/off</code> — эхо\n"
+    "• <code>.dl N текст</code> — автоудаление\n"
+    "• <code>.txt текст</code> — анимация печати\n"
+    "• <code>.rps</code> — камень-ножницы-бумага\n"
+    "• <code>.ttt</code> — крестики-нолики\n"
+    "• <code>.wordle слово</code> — угадай слово\n\n"
+    "💱 <b>Полезное</b>\n"
+    "• <code>.price</code> — курсы валют\n\n"
+    "👻 <b>Приватность</b>\n"
+    "• <code>.ghost on/off</code> — копия входящих в ЛС\n\n"
     "📸 <b>Медиа</b>\n"
     "• Ответ на медиа → одноразовое фото в ЛС\n"
     "━━━━━━━━━━━━━━━━━━━━"
@@ -561,20 +688,19 @@ async def on_business_connection(conn: types.BusinessConnection):
         logging.error(f"on_business_connection: {e}")
 
 
-# ================== NONMUTE ==================
+# ================== NONMUTE / ВОССТАНОВЛЕНИЕ ==================
 @dp.deleted_business_messages()
 async def on_deleted_messages(event: types.BusinessMessagesDeleted):
     try:
         chat_id = event.chat.id
         conn_id = event.business_connection_id
 
-        # Только своё подключение
+        # Работаем для любого подключения
         owner_id_of_conn = await get_owner_id(conn_id)
-        if owner_id_of_conn != OWNER_ID:
+        if not owner_id_of_conn:
             return
 
         if nonmute_active.get(chat_id, True) is False:
-            logging.info(f"🔒 Восстановление выключено в чате {chat_id}")
             return
 
         cached = message_cache.get(chat_id, {})
@@ -622,15 +748,9 @@ async def business_msg(message: types.Message):
 
         # Владелец ЭТОГО подключения
         owner_id_of_conn = await get_owner_id(conn_id)
-
-        # =========================================================
-        #  ГЛАВНАЯ ПРОВЕРКА: работаем ТОЛЬКО через своё подключение
-        #  Всё, что приходит через подключение собеседника — игнор.
-        # =========================================================
-        if owner_id_of_conn != OWNER_ID:
+        if not owner_id_of_conn:
             return
 
-        # Кэшируем все сообщения
         cache_message(message)
 
         if message.from_user:
@@ -638,9 +758,23 @@ async def business_msg(message: types.Message):
             if message.from_user.username:
                 username_cache[message.from_user.username.lower()] = message.from_user.id
 
-        is_incoming = message.from_user and message.from_user.id != OWNER_ID
+        is_incoming = message.from_user and message.from_user.id != owner_id_of_conn
 
-        # Эхо — только для входящих не-команд
+        # GHOST — копируем входящие владельцу в ЛС
+        if ghost_chats.get(chat_id) and is_incoming and not text.startswith("."):
+            try:
+                user = message.from_user
+                fwd = (
+                    f"👻 <b>Ghost</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"👤 @{user.username or user.full_name} (<code>{user.id}</code>)\n"
+                    f"📝 <code>{(message.text or '[медиа]')[:500]}</code>"
+                )
+                await bot.send_message(owner_id_of_conn, fwd, parse_mode="HTML")
+            except Exception as e:
+                logging.error(f"ghost: {e}")
+
+        # ЭХО — только для входящих не-команд
         if echo_chats.get(chat_id) and is_incoming and text and not text.startswith("."):
             try:
                 await bot.send_message(chat_id=chat_id, text=text, business_connection_id=conn_id)
@@ -651,8 +785,24 @@ async def business_msg(message: types.Message):
         if not text.startswith("."):
             return
 
-        # Команды — только от OWNER_ID
-        if not message.from_user or message.from_user.id != OWNER_ID:
+        # =========================================================
+        #  Команды — ТОЛЬКО от владельца ЭТОГО подключения
+        #  (любой юзер, кто подключил бота к своему бизнес-аккаунту)
+        # =========================================================
+        if not message.from_user or message.from_user.id != owner_id_of_conn:
+            uid = message.from_user.id if message.from_user else "?"
+            logging.info(f"⏭ Игнор команды (не владелец подключения): {text[:30]} от {uid}")
+            return
+
+        # ПРОВЕРКА ПОДПИСКИ НА КАНАЛ
+        if not await check_subscription(owner_id_of_conn):
+            await delete_cmd(message)
+            await send_confirm(
+                chat_id,
+                "⚠️ <b>Нужна подписка на канал!</b>\n\n"
+                f"📢 Подпишись: {CHANNEL_LINK}\n\n"
+                "Затем напиши /start в ЛС бота.",
+                conn_id, 10)
             return
 
         parts = text.split()
@@ -668,7 +818,7 @@ async def business_msg(message: types.Message):
                 target_id = message.reply_to_message.from_user.id
             else:
                 target_id = chat_id
-            if target_id == OWNER_ID:
+            if target_id == owner_id_of_conn:
                 await delete_cmd(message)
                 await send_confirm(chat_id, "❌ Ответь реплаем на сообщение собеседника", conn_id, 5)
                 return
@@ -698,7 +848,7 @@ async def business_msg(message: types.Message):
                 target_id = message.reply_to_message.from_user.id
             else:
                 target_id = chat_id
-            if target_id == OWNER_ID:
+            if target_id == owner_id_of_conn:
                 await delete_cmd(message)
                 await send_confirm(chat_id, "❌ Ответь реплаем на сообщение собеседника", conn_id, 5)
                 return
@@ -881,6 +1031,141 @@ async def business_msg(message: types.Message):
                 await send_confirm(chat_id, "🔇 <b>Эхо выключено</b>", conn_id, 5)
             return
 
+        # ---- .dl N текст ----
+        if cmd == ".dl":
+            if len(parts) < 3:
+                await delete_cmd(message)
+                await send_confirm(chat_id, "❌ <code>.dl N текст</code>", conn_id, 5)
+                return
+            try:
+                sec = min(int(parts[1]), 300)
+            except ValueError:
+                sec = 5
+            dl_text = " ".join(parts[2:])
+            await delete_cmd(message)
+            try:
+                msg = await bot.send_message(chat_id=chat_id, text=dl_text, business_connection_id=conn_id)
+                asyncio.create_task(auto_delete(chat_id, msg.message_id, conn_id, sec))
+            except Exception as e:
+                logging.error(f"dl: {e}")
+            return
+
+        # ---- .txt текст ----
+        if cmd == ".txt":
+            if len(parts) < 2:
+                await delete_cmd(message)
+                return
+            src = " ".join(parts[1:])
+            await delete_cmd(message)
+            try:
+                msg = await bot.send_message(chat_id=chat_id, text="▫️", business_connection_id=conn_id)
+                current = ""
+                for ch in src[:80]:
+                    current += ch
+                    try:
+                        await bot.edit_message_text(
+                            chat_id=chat_id, message_id=msg.message_id,
+                            text=current + "▫️",
+                            business_connection_id=conn_id,
+                        )
+                    except Exception:
+                        pass
+                    await asyncio.sleep(0.4)
+                try:
+                    await bot.edit_message_text(
+                        chat_id=chat_id, message_id=msg.message_id,
+                        text=current,
+                        business_connection_id=conn_id,
+                    )
+                except Exception:
+                    pass
+            except Exception as e:
+                logging.error(f"txt: {e}")
+            return
+
+        # ---- .price ----
+        if cmd == ".price":
+            await delete_cmd(message)
+            try:
+                prices = await fetch_prices()
+                await send_confirm(chat_id, prices, conn_id, 30)
+            except Exception as e:
+                logging.error(f"price: {e}")
+                await send_confirm(chat_id, "❌ Не удалось получить курсы", conn_id, 5)
+            return
+
+        # ---- .rps ----
+        if cmd == ".rps":
+            await delete_cmd(message)
+            bot_choice = random.choice(list(RPS_WINS.keys()))
+            kb = types.InlineKeyboardMarkup(inline_keyboard=[[
+                types.InlineKeyboardButton(text="✊ Камень", callback_data=f"rps_камень_{bot_choice}"),
+                types.InlineKeyboardButton(text="✌️ Ножницы", callback_data=f"rps_ножницы_{bot_choice}"),
+                types.InlineKeyboardButton(text="✋ Бумага", callback_data=f"rps_бумага_{bot_choice}"),
+            ]])
+            await send_confirm(chat_id, "🎮 <b>Камень-ножницы-бумага</b>\n\n👇 Сделай выбор:", conn_id, 30, reply_markup=kb)
+            return
+
+        # ---- .ttt ----
+        if cmd == ".ttt":
+            await delete_cmd(message)
+            ttt_games[chat_id] = {"board": [" "] * 9}
+            kb = ttt_board_kb(chat_id)
+            await send_confirm(chat_id, "❌ <b>Крестики-нолики</b>\n\n👇 Твой ход:", conn_id, 120, reply_markup=kb)
+            return
+
+        # ---- .wordle ----
+        if cmd == ".wordle":
+            if len(parts) < 2:
+                await delete_cmd(message)
+                await send_confirm(chat_id, "❌ <code>.wordle слово</code>", conn_id, 5)
+                return
+            word = parts[1].lower()
+            if not word.isalpha() or len(word) < 3:
+                await delete_cmd(message)
+                await send_confirm(chat_id, "❌ Слово должно быть от 3 букв", conn_id, 5)
+                return
+            wordle_games[chat_id] = {"word": word, "tries": 5, "history": []}
+            await delete_cmd(message)
+            await send_confirm(chat_id, wordle_render(wordle_games[chat_id]), conn_id, 120)
+            return
+
+        # ---- .ghost on/off ----
+        if cmd == ".ghost":
+            arg = parts[1].lower() if len(parts) > 1 else ""
+            if arg == "on":
+                ghost_chats[chat_id] = True
+                await delete_cmd(message)
+                await send_confirm(chat_id, "👻 <b>Ghost включён</b> — входящие в ЛС", conn_id, 5)
+            elif arg == "off":
+                ghost_chats.pop(chat_id, None)
+                await delete_cmd(message)
+                await send_confirm(chat_id, "👻 <b>Ghost выключен</b>", conn_id, 5)
+            else:
+                await delete_cmd(message)
+                await send_confirm(chat_id, "ℹ️ <code>.ghost on/off</code>", conn_id, 5)
+            return
+
+        # ---- .wordle — попытка (без точки) ----
+        if chat_id in wordle_games and len(text.split()) == 1 and text.isalpha():
+            game = wordle_games[chat_id]
+            guess = text.lower()
+            if len(guess) != len(game["word"]):
+                return
+            marks = wordle_marks(game["word"], guess)
+            game["history"].append((guess, marks))
+            game["tries"] -= 1
+            await delete_cmd(message)
+            if guess == game["word"]:
+                await send_confirm(chat_id, wordle_render(game) + "\n\n🎉 <b>Угадал!</b>", conn_id, 60)
+                wordle_games.pop(chat_id, None)
+            elif game["tries"] <= 0:
+                await send_confirm(chat_id, wordle_render(game) + f"\n\n😢 <b>Не угадал. Слово: {game['word']}</b>", conn_id, 60)
+                wordle_games.pop(chat_id, None)
+            else:
+                await send_confirm(chat_id, wordle_render(game), conn_id, 120)
+            return
+
     except Exception as e:
         logging.error(f"business_msg error: {type(e).__name__}: {e}")
 
@@ -896,21 +1181,93 @@ async def onetime_media(message: types.Message):
     has_media = bool(replied.photo or replied.video or replied.video_note)
     if not has_media:
         return
-    if not message.from_user or message.from_user.id != OWNER_ID:
-        return
     conn_id = message.business_connection_id
     owner_id_of_conn = await get_owner_id(conn_id)
-    if owner_id_of_conn != OWNER_ID:
+    if not owner_id_of_conn:
+        return
+    if not message.from_user or message.from_user.id != owner_id_of_conn:
+        return
+    if not await check_subscription(owner_id_of_conn):
         return
     try:
         await bot.copy_message(
-            chat_id=OWNER_ID,
+            chat_id=owner_id_of_conn,
             from_chat_id=replied.chat.id,
             message_id=replied.message_id,
         )
         await send_confirm(message.chat.id, "✅ <b>Медиа отправлено в ЛС</b>", conn_id, 3)
     except Exception as e:
         logging.error(f"onetime_media: {e}")
+
+
+# ================== CALLBACKS: RPS / TTT ==================
+@dp.callback_query(F.data.startswith("rps_"))
+async def cb_rps(call):
+    parts = call.data.split("_")
+    if len(parts) != 3:
+        await call.answer()
+        return
+    player = parts[1]
+    bot_choice = parts[2]
+    result = rps_result(player, bot_choice)
+    text = f"✊ Ты: <b>{player}</b>\n🤖 Бот: <b>{bot_choice}</b>\n\n{result}"
+    try:
+        await call.message.edit_text(text, parse_mode="HTML")
+    except Exception:
+        pass
+    await call.answer()
+
+
+@dp.callback_query(F.data.startswith("ttt_"))
+async def cb_ttt(call):
+    try:
+        idx = int(call.data.split("_")[1])
+    except Exception:
+        await call.answer()
+        return
+    # Найти чат по message
+    chat_id = call.message.chat.id
+    game = ttt_games.get(chat_id)
+    if not game:
+        await call.answer("Игра не найдена", show_alert=True)
+        return
+    board = game["board"]
+    if board[idx] != " ":
+        await call.answer("Занято", show_alert=True)
+        return
+    board[idx] = "❌"
+    winner = ttt_check_winner(board)
+    if not winner:
+        # Ход бота — рандом
+        free = [i for i in range(9) if board[i] == " "]
+        if free:
+            board[random.choice(free)] = "⭕"
+            winner = ttt_check_winner(board)
+    kb = ttt_board_kb(chat_id)
+    if winner == "❌":
+        try:
+            await call.message.edit_text("❌ <b>Победа!</b>", parse_mode="HTML")
+        except Exception:
+            pass
+        ttt_games.pop(chat_id, None)
+    elif winner == "⭕":
+        try:
+            await call.message.edit_text("⭕ <b>Бот победил</b>", parse_mode="HTML")
+        except Exception:
+            pass
+        ttt_games.pop(chat_id, None)
+    elif winner == "draw":
+        try:
+            await call.message.edit_text("🤝 <b>Ничья</b>", parse_mode="HTML")
+        except Exception:
+            pass
+        ttt_games.pop(chat_id, None)
+    else:
+        try:
+            await call.message.edit_reply_markup(reply_markup=kb)
+        except Exception:
+            pass
+    await call.answer()
 
 
 # ================== КОМАНДЫ В ЛИЧКЕ ==================
@@ -929,9 +1286,7 @@ async def pm_commands(message: types.Message):
             "<code>.mute @user N</code> — мут на N мин\n"
             "<code>.unmute @user</code> — снять мут\n"
             "<code>.warn @user N</code> — варны\n"
-            "<code>.unwarn @user</code> — сбросить\n"
-            "<code>.spam @user N текст</code> — спам\n"
-            "<code>.clone @user on/off</code> — автоповтор\n\n"
+            "<code>.unwarn @user</code> — сбросить\n\n"
             "⚠️ Вместо @user можно ID.",
             parse_mode="HTML")
         return
@@ -960,30 +1315,6 @@ async def pm_commands(message: types.Message):
         await delete_warn_msg(chat_id)
         await bot_api("sendMessage", {"chat_id": chat_id, "text": "🔊 Мут снят", "business_connection_id": conn_id})
         await message.answer(f"✅ Мут снят с <b>{target}</b>", parse_mode="HTML")
-        return
-
-    if parts[0] == ".warn" and len(parts) >= 3:
-        target = parts[1].lstrip("@")
-        try:
-            c = int(parts[2])
-        except ValueError:
-            c = 1
-        conn_id, chat_id = await find_connection_by_target(target)
-        if not conn_id:
-            await message.answer(f"❌ Не нашёл <b>{target}</b>", parse_mode="HTML"); return
-        warns[chat_id] = warns.get(chat_id, 0) + c
-        await bot_api("sendMessage", {"chat_id": chat_id, "text": f"⚠️ Warn {warns[chat_id]}/{WARN_LIMIT}", "business_connection_id": conn_id})
-        await message.answer(f"✅ Warn <b>{warns[chat_id]}</b> для <b>{target}</b>", parse_mode="HTML")
-        return
-
-    if parts[0] == ".unwarn" and len(parts) >= 2:
-        target = parts[1].lstrip("@")
-        conn_id, chat_id = await find_connection_by_target(target)
-        if not conn_id:
-            await message.answer(f"❌ Не нашёл <b>{target}</b>", parse_mode="HTML"); return
-        warns.pop(chat_id, None)
-        await bot_api("sendMessage", {"chat_id": chat_id, "text": "✅ Варны сброшены", "business_connection_id": conn_id})
-        await message.answer(f"✅ Варны сброшены у <b>{target}</b>", parse_mode="HTML")
         return
 
 
