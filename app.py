@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 AntiSpam Defender Bot — Business-бот.
-Ответы бота НЕ удаляются. Удаляются только команды юзера.
+Fix: только своё подключение (без дублей). Ответы бота не удаляются.
 """
 
 import os
@@ -67,6 +67,7 @@ SIMILAR = {
 DB_PATH = "bot.db"
 NAME_UPDATE_INTERVAL = 86400
 CACHE_LIMIT = 200
+DEDUP_WINDOW = 5  # сек — окно дедупликации
 
 BANNER_PATH = os.path.join(os.path.dirname(__file__), "angel.jpg")
 BANNER_FALLBACK = os.path.join(os.path.dirname(__file__), "IMG_20260918_155302_695.jpg")
@@ -100,6 +101,7 @@ ghost_chats = {}
 rps_games = {}
 ttt_games = {}
 wordle_games = {}
+processed_updates = {}  # {(chat_id, from_user_id, text): timestamp} — дедупликация
 
 
 # ================== БАЗА ==================
@@ -160,6 +162,22 @@ dp = Dispatcher(storage=MemoryStorage())
 
 
 # ================== УТИЛИТЫ ==================
+def is_duplicate(chat_id: int, from_user_id: int, text: str) -> bool:
+    """Дедупликация апдейтов по (chat_id, from_user_id, text)."""
+    now = time.time()
+    key = (chat_id, from_user_id, (text or "")[:100])
+    last = processed_updates.get(key)
+    if last and (now - last) < DEDUP_WINDOW:
+        return True
+    processed_updates[key] = now
+    # Чистим старые
+    if len(processed_updates) > 500:
+        old_keys = [k for k, v in processed_updates.items() if now - v > 60]
+        for k in old_keys:
+            processed_updates.pop(k, None)
+    return False
+
+
 async def bot_api(method, data):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
     try:
@@ -203,7 +221,6 @@ async def delete_cmd(message):
 
 
 async def send_confirm(chat_id, text, conn_id, seconds=None, reply_markup=None):
-    """Отправляет ответ. seconds — только для .dl (автоудаление)."""
     try:
         kwargs = {"chat_id": chat_id, "text": text, "business_connection_id": conn_id, "parse_mode": "HTML"}
         if reply_markup:
@@ -457,23 +474,35 @@ def wordle_marks(word: str, guess: str) -> str:
 
 # ================== ФОНОВАЯ ЗАДАЧА ==================
 async def update_bot_name():
+    """Обновляет имя бота. При Flood control — ждёт и логирует."""
     try:
         total = await get_total_users()
         new_name = f"AntiSpam Defender | {total}"
         if len(new_name) > 64:
             new_name = f"AntiSpam | {total}"
-        await bot(SetMyName(name=new_name))
+        result = await bot(SetMyName(name=new_name))
         logging.info(f"🏷 Имя бота: {new_name}")
+        return True
     except Exception as e:
-        logging.error(f"❌ Ошибка обновления имени: {e}")
+        err = str(e)
+        if "Flood control" in err or "Too Many Requests" in err:
+            logging.warning(f"⏳ Flood control на setMyName: {err}")
+        else:
+            logging.error(f"❌ Ошибка обновления имени: {e}")
+        return False
 
 
 async def background_name_updater():
-    await asyncio.sleep(60)
-    await update_bot_name()
+    # Не дёргаем сразу после старта — ждём 5 минут
+    await asyncio.sleep(300)
+    ok = await update_bot_name()
     while True:
-        await asyncio.sleep(NAME_UPDATE_INTERVAL)
-        await update_bot_name()
+        # Если flood — ждём 2 часа. Иначе — 24 часа
+        if ok:
+            await asyncio.sleep(NAME_UPDATE_INTERVAL)
+        else:
+            await asyncio.sleep(7200)
+        ok = await update_bot_name()
 
 
 # ================== ПОДПИСКА ==================
@@ -748,6 +777,16 @@ async def business_msg(message: types.Message):
         if not owner_id_of_conn:
             return
 
+        # =========================================================
+        #  ДЕДУПЛИКАЦИЯ: если такой апдейт (chat + user + text)
+        #  уже был за последние 5 сек — игнор.
+        #  Это отсекает дубли, когда апдейт приходит дважды.
+        # =========================================================
+        if message.from_user:
+            if is_duplicate(chat_id, message.from_user.id, text):
+                logging.info(f"⏭ Дубль апдейта: {text[:30]} | chat={chat_id} user={message.from_user.id}")
+                return
+
         cache_message(message)
 
         if message.from_user:
@@ -784,6 +823,8 @@ async def business_msg(message: types.Message):
 
         # Команды — ТОЛЬКО от владельца этого подключения
         if not message.from_user or message.from_user.id != owner_id_of_conn:
+            logging.info(f"⏭ Игнор (не владелец подключения): {text[:30]} | "
+                         f"from={message.from_user.id if message.from_user else '?'} owner={owner_id_of_conn}")
             return
 
         # ПОДПИСКА
@@ -1023,7 +1064,7 @@ async def business_msg(message: types.Message):
                 await send_confirm(chat_id, "🔇 <b>Эхо выключено</b>", conn_id)
             return
 
-        # ---- .dl (ЕДИНСТВЕННАЯ с автоудалением) ----
+        # ---- .dl ----
         if cmd == ".dl":
             if len(parts) < 3:
                 await delete_cmd(message)
