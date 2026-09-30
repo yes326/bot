@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 AntiSpam Defender Bot — Business-бот.
-nonmute по умолчанию ВЫКЛЮЧЕН. Волна 2: статусы .text / .photo / .gs.
+nonmute выключен по умолчанию. Добавлена команда .story.
 """
 
 import os
@@ -236,7 +236,6 @@ async def send_confirm(chat_id, text, conn_id, seconds=None, reply_markup=None):
 
 
 async def send_chat_action(chat_id, conn_id, action):
-    """Отправляет chat action один раз (виден ~5 сек)."""
     actions_map = {
         "typing": "typing",
         "photo": "upload_photo",
@@ -253,8 +252,6 @@ async def send_chat_action(chat_id, conn_id, action):
         })
         if result:
             logging.info(f"✅ ChatAction '{act}' → chat={chat_id}")
-        else:
-            logging.warning(f"⚠️ ChatAction '{act}' не отправлен")
         return result
     except Exception as e:
         logging.error(f"send_chat_action: {e}")
@@ -344,6 +341,51 @@ def cache_message(message):
                 message_cache[chat_id].pop(old_id, None)
     except Exception as e:
         logging.error(f"cache_message: {e}")
+
+
+# ================== STORY: НАРЕЗКА И СКАЧИВАНИЕ ==================
+async def download_file(file_id: str):
+    """Скачивает файл из Telegram по file_id. Возвращает bytes."""
+    try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/getFile"
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json={"file_id": file_id}) as r:
+                data = await r.json()
+                if not data.get("ok"):
+                    logging.error(f"getFile: {data}")
+                    return None
+                file_path = data["result"]["file_path"]
+            file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
+            async with session.get(file_url) as r:
+                return await r.read()
+    except Exception as e:
+        logging.error(f"download_file: {e}")
+        return None
+
+
+def split_3x3(img_bytes: bytes):
+    """Режет фото на 9 частей 3×3. Возвращает список bytes JPEG."""
+    from PIL import Image
+    try:
+        img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        w, h = img.size
+        side = min(w, h)
+        left = (w - side) // 2
+        top = (h - side) // 2
+        img = img.crop((left, top, left + side, top + side))
+        cell = side // 3
+        parts = []
+        for r in range(3):
+            for c in range(3):
+                box = (c * cell, r * cell, (c + 1) * cell, (r + 1) * cell)
+                piece = img.crop(box)
+                buf = io.BytesIO()
+                piece.save(buf, format="JPEG", quality=95)
+                parts.append(buf.getvalue())
+        return parts
+    except Exception as e:
+        logging.error(f"split_3x3: {e}")
+        return []
 
 
 # ================== КАЛЬКУЛЯТОР ==================
@@ -637,6 +679,8 @@ TEXT_CMD_LIST = (
     "• <code>.rps</code> — камень-ножницы-бумага\n"
     "• <code>.ttt</code> — крестики-нолики\n"
     "• <code>.wordle слово</code> — угадай слово\n\n"
+    "📸 <b>Истории</b>\n"
+    "• <code>.story</code> (ответ на фото) — 3×3 в историю\n\n"
     "📝 <b>Статусы</b>\n"
     "• <code>.text</code> — «печатает» (5 сек)\n"
     "• <code>.photo</code> — «фото» (5 сек)\n"
@@ -744,7 +788,7 @@ async def on_business_connection(conn: types.BusinessConnection):
         logging.error(f"on_business_connection: {e}")
 
 
-# ================== NONMUTE (по умолчанию ВЫКЛЮЧЕН) ==================
+# ================== NONMUTE ==================
 @dp.deleted_business_messages()
 async def on_deleted_messages(event: types.BusinessMessagesDeleted):
     try:
@@ -756,7 +800,6 @@ async def on_deleted_messages(event: types.BusinessMessagesDeleted):
             return
 
         if nonmute_active.get(chat_id, False) is not True:
-            logging.info(f"⏸ nonmute выключен в чате {chat_id}")
             return
 
         cached = message_cache.get(chat_id, {})
@@ -766,14 +809,12 @@ async def on_deleted_messages(event: types.BusinessMessagesDeleted):
         for msg_id in event.message_ids:
             if msg_id in deleted_by_bot:
                 deleted_by_bot.discard(msg_id)
-                logging.info(f"⏭ Пропуск восстановления (удалено ботом): {msg_id}")
                 continue
             data = cached.get(msg_id)
             if not data:
                 continue
             txt = (data.get("text") or "").strip()
             if txt.startswith("."):
-                logging.info(f"⏭ Пропуск восстановления команды: {txt[:30]}")
                 continue
             try:
                 if data.get("text"):
@@ -816,7 +857,6 @@ async def business_msg(message: types.Message):
 
         if message.from_user:
             if is_duplicate(chat_id, message.from_user.id, text):
-                logging.info(f"⏭ Дубль апдейта: {text[:30]}")
                 return
 
         cache_message(message)
@@ -854,7 +894,6 @@ async def business_msg(message: types.Message):
             return
 
         if not message.from_user or message.from_user.id != owner_id_of_conn:
-            logging.info(f"⏭ Игнор (не владелец подключения): {text[:30]}")
             return
 
         if not await check_subscription(owner_id_of_conn):
@@ -1206,6 +1245,60 @@ async def business_msg(message: types.Message):
             else:
                 await delete_cmd(message)
                 await send_confirm(chat_id, "ℹ️ <code>.ghost on/off</code>", conn_id)
+            return
+
+        # ---- .story ----
+        if cmd == ".story":
+            if not message.reply_to_message or not message.reply_to_message.photo:
+                await delete_cmd(message)
+                await send_confirm(chat_id, "❌ Ответь реплаем на фото", conn_id)
+                return
+            await delete_cmd(message)
+            await send_confirm(chat_id, "⏳ Режу фото на 9 частей...", conn_id, 3)
+            photo = message.reply_to_message.photo[-1]
+            file_bytes = await download_file(photo.file_id)
+            if not file_bytes:
+                await send_confirm(chat_id, "❌ Не удалось скачать фото", conn_id)
+                return
+            parts_img = split_3x3(file_bytes)
+            if not parts_img:
+                await send_confirm(chat_id, "❌ Ошибка нарезки", conn_id)
+                return
+            caption = " ".join(parts[1:]) if len(parts) > 1 else ""
+            posted = 0
+            failed = 0
+            last_err = ""
+            for idx, piece in enumerate(parts_img):
+                try:
+                    url = f"https://api.telegram.org/bot{BOT_TOKEN}/postStory"
+                    data = {
+                        "business_connection_id": conn_id,
+                        "active_period": 86400,
+                        "post_to_chat_page": "true",
+                    }
+                    if caption:
+                        data["caption"] = caption[:200]
+                    files = {
+                        "content": (f"part_{idx}.jpg", piece, "image/jpeg"),
+                    }
+                    async with aiohttp.ClientSession() as session:
+                        async with session.post(url, data=data, files=files) as r:
+                            res = await r.json()
+                            if res.get("ok"):
+                                posted += 1
+                            else:
+                                failed += 1
+                                last_err = res.get("description", "")
+                                logging.error(f"postStory {idx}: {res}")
+                    await asyncio.sleep(0.7)
+                except Exception as e:
+                    failed += 1
+                    last_err = str(e)
+                    logging.error(f"postStory {idx}: {e}")
+            if posted == 0 and last_err:
+                await send_confirm(chat_id, f"❌ Ошибка: <code>{last_err[:150]}</code>", conn_id)
+            else:
+                await send_confirm(chat_id, f"✅ Выложено: <b>{posted}/9</b>", conn_id)
             return
 
         # ---- СТАТУСЫ ----
