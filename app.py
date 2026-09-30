@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 AntiSpam Defender Bot — Business-бот.
-nonmute выключен по умолчанию. .story через aiohttp.FormData.
+fix: postStory через content JSON + attach://story_photo.
 """
 
 import os
@@ -12,6 +12,7 @@ import aiohttp
 import time
 import io
 import ast
+import json
 import operator
 import random
 import aiosqlite
@@ -343,7 +344,7 @@ def cache_message(message):
         logging.error(f"cache_message: {e}")
 
 
-# ================== STORY: СКАЧИВАНИЕ И НАРЕЗКА ==================
+# ================== STORY: СКАЧИВАНИЕ / НАРЕЗКА / POST ==================
 async def download_file(file_id: str):
     """Скачивает файл из Telegram по file_id. Возвращает bytes."""
     try:
@@ -398,8 +399,12 @@ async def post_story(conn_id: str, image_bytes: bytes, filename: str, caption: s
         form.add_field("post_to_chat_page", "true")
         if caption:
             form.add_field("caption", caption[:200])
+        # content — JSON с attach://
+        content_json = json.dumps({"type": "photo", "photo": "attach://story_photo"})
+        form.add_field("content", content_json)
+        # сам файл — поле "story_photo"
         form.add_field(
-            "content",
+            "story_photo",
             image_bytes,
             filename=filename,
             content_type="image/jpeg",
