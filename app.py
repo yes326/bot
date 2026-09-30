@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 AntiSpam Defender Bot — Business-бот.
-nonmute по умолчанию ВЫКЛЮЧЕН. Восстановление только после .nonmute on.
+nonmute по умолчанию ВЫКЛЮЧЕН. Волна 2: статусы .text / .photo / .gs.
 """
 
 import os
@@ -94,7 +94,7 @@ warn_messages = {}
 referrals = {}
 username_cache = {}
 last_conn_by_chat = {}
-nonmute_active = {}  # по умолчанию ВЫКЛЮЧЕН — включается только .nonmute on
+nonmute_active = {}
 bot_rate = defaultdict(list)
 echo_chats = {}
 ghost_chats = {}
@@ -232,6 +232,32 @@ async def send_confirm(chat_id, text, conn_id, seconds=None, reply_markup=None):
         return msg
     except Exception as e:
         logging.error(f"send_confirm failed: {e}")
+        return None
+
+
+async def send_chat_action(chat_id, conn_id, action):
+    """Отправляет chat action один раз (виден ~5 сек)."""
+    actions_map = {
+        "typing": "typing",
+        "photo": "upload_photo",
+        "video": "upload_video",
+        "voice": "record_voice",
+        "document": "upload_document",
+    }
+    act = actions_map.get(action, "typing")
+    try:
+        result = await bot_api("sendChatAction", {
+            "chat_id": chat_id,
+            "business_connection_id": conn_id,
+            "action": act,
+        })
+        if result:
+            logging.info(f"✅ ChatAction '{act}' → chat={chat_id}")
+        else:
+            logging.warning(f"⚠️ ChatAction '{act}' не отправлен")
+        return result
+    except Exception as e:
+        logging.error(f"send_chat_action: {e}")
         return None
 
 
@@ -611,6 +637,10 @@ TEXT_CMD_LIST = (
     "• <code>.rps</code> — камень-ножницы-бумага\n"
     "• <code>.ttt</code> — крестики-нолики\n"
     "• <code>.wordle слово</code> — угадай слово\n\n"
+    "📝 <b>Статусы</b>\n"
+    "• <code>.text</code> — «печатает» (5 сек)\n"
+    "• <code>.photo</code> — «фото» (5 сек)\n"
+    "• <code>.gs</code> — «голосовое» (5 сек)\n\n"
     "💱 <b>Полезное</b>\n"
     "• <code>.price</code> — курсы валют\n\n"
     "👻 <b>Приватность</b>\n"
@@ -725,7 +755,6 @@ async def on_deleted_messages(event: types.BusinessMessagesDeleted):
         if not owner_id_of_conn:
             return
 
-        # ВАЖНО: nonmute работает ТОЛЬКО после .nonmute on
         if nonmute_active.get(chat_id, False) is not True:
             logging.info(f"⏸ nonmute выключен в чате {chat_id}")
             return
@@ -742,7 +771,6 @@ async def on_deleted_messages(event: types.BusinessMessagesDeleted):
             data = cached.get(msg_id)
             if not data:
                 continue
-            # Не восстанавливать команды (начинаются с .)
             txt = (data.get("text") or "").strip()
             if txt.startswith("."):
                 logging.info(f"⏭ Пропуск восстановления команды: {txt[:30]}")
@@ -786,7 +814,6 @@ async def business_msg(message: types.Message):
         if not owner_id_of_conn:
             return
 
-        # Дедупликация
         if message.from_user:
             if is_duplicate(chat_id, message.from_user.id, text):
                 logging.info(f"⏭ Дубль апдейта: {text[:30]}")
@@ -826,12 +853,10 @@ async def business_msg(message: types.Message):
         if not text.startswith("."):
             return
 
-        # Команды — только от владельца этого подключения
         if not message.from_user or message.from_user.id != owner_id_of_conn:
             logging.info(f"⏭ Игнор (не владелец подключения): {text[:30]}")
             return
 
-        # ПОДПИСКА
         if not await check_subscription(owner_id_of_conn):
             await delete_cmd(message)
             await send_confirm(
@@ -1181,6 +1206,37 @@ async def business_msg(message: types.Message):
             else:
                 await delete_cmd(message)
                 await send_confirm(chat_id, "ℹ️ <code>.ghost on/off</code>", conn_id)
+            return
+
+        # ---- СТАТУСЫ ----
+        if cmd == ".text":
+            await delete_cmd(message)
+            await send_chat_action(chat_id, conn_id, "typing")
+            return
+
+        if cmd == ".untext":
+            await delete_cmd(message)
+            await send_confirm(chat_id, "⌨️ <b>Статус «печатает» снят</b>", conn_id)
+            return
+
+        if cmd == ".photo":
+            await delete_cmd(message)
+            await send_chat_action(chat_id, conn_id, "photo")
+            return
+
+        if cmd == ".unphoto":
+            await delete_cmd(message)
+            await send_confirm(chat_id, "📷 <b>Статус «фото» снят</b>", conn_id)
+            return
+
+        if cmd == ".gs":
+            await delete_cmd(message)
+            await send_chat_action(chat_id, conn_id, "voice")
+            return
+
+        if cmd == ".ungs":
+            await delete_cmd(message)
+            await send_confirm(chat_id, "🎙 <b>Статус «голосовое» снят</b>", conn_id)
             return
 
         # ---- wordle guess ----
