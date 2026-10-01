@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 AntiSpam Defender Bot — Business-бот.
-+ .type on/off — авто-шрифт.
-+ .spam задержка 0.15 сек.
-+ Удаление сообщений замученных собеседников.
++ price: ЦБ РФ + CoinCap (без ключа)
++ монотонный счётчик (не падает в 0)
++ .type, .spam 0.15, удаление сообщений замученных
 """
 
 import os
@@ -47,6 +47,9 @@ WARN_MUTE_MINUTES = 60
 
 BOT_RATE_LIMIT = 5
 BOT_RATE_WINDOW = 60
+
+# минимум для счётчика (задать через env в Render)
+ENV_MAX_SEEN = int(os.environ.get("MAX_SEEN_COUNT", "0"))
 
 ZWSP = "\u200b"
 ZWNJ = "\u200c"
@@ -108,6 +111,9 @@ processed_updates = {}
 deleted_by_bot = set()
 type_styles = {}
 
+# Монотонный счётчик — не падает ниже этого значения
+_monotonic_count = ENV_MAX_SEEN
+
 
 # ================== СТИЛИ ==================
 TYPE_STYLES = {
@@ -132,6 +138,12 @@ async def init_db():
                 joined_at TEXT
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS meta (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
         await db.commit()
 
 
@@ -145,10 +157,28 @@ async def register_user(user_id, username, first_name):
 
 
 async def get_total_users():
+    """Монотонный счётчик: max(COUNT(*), env, сохранённый в meta)."""
+    global _monotonic_count
     async with aiosqlite.connect(DB_PATH) as db:
+        # Считаем из users
         cur = await db.execute("SELECT COUNT(*) FROM users")
         row = await cur.fetchone()
-        return row[0] if row else 0
+        count = row[0] if row else 0
+        # Читаем сохранённый максимум
+        cur = await db.execute("SELECT value FROM meta WHERE key='max_seen_count'")
+        row = await cur.fetchone()
+        saved = int(row[0]) if row and row[0] else 0
+        # Итог: max из всех источников
+        result = max(count, saved, ENV_MAX_SEEN, _monotonic_count)
+        # Обновляем сохранённый максимум
+        if result > saved:
+            await db.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES ('max_seen_count', ?)",
+                (str(result),),
+            )
+            await db.commit()
+        _monotonic_count = result
+        return result
 
 
 async def get_last_users(limit=10):
@@ -473,32 +503,73 @@ def calc_expr(expr: str):
         return None
 
 
-# ================== КУРСЫ ==================
+# ================== КУРСЫ: ЦБ РФ + CoinCap ==================
 async def fetch_prices() -> str:
+    """ЦБ РФ (USD, EUR, CNY) + CoinCap (USDT, TON)."""
     lines = ["💱 <b>Курсы валют к рублю</b>", "━━━━━━━━━━━━━━━━━━━━"]
+    got_any = False
+
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
-            async with session.get("https://www.cbr-xml-daily.ru/daily_json.js") as r:
-                data = await r.json()
-                usd = data["Valute"]["USD"]["Value"]
-                eur = data["Valute"]["EUR"]["Value"]
-                cny = data["Valute"]["CNY"]["Value"]
-                lines.append(f"🇺🇸 USD: <b>{usd:.2f}₽</b>")
-                lines.append(f"🇪🇺 EUR: <b>{eur:.2f}₽</b>")
-                lines.append(f"🇨🇳 CNY: <b>{cny:.2f}₽</b>")
+            # === ЦБ РФ ===
             try:
-                url = "https://api.coingecko.com/api/v3/simple/price?ids=tether,the-open-network&vs_currencies=rub"
-                async with session.get(url) as r:
-                    d = await r.json()
-                    if "tether" in d:
-                        lines.append(f"💵 USDT: <b>{d['tether']['rub']:.2f}₽</b>")
-                    if "the-open-network" in d:
-                        lines.append(f"💎 TON (GRAM): <b>{d['the-open-network']['rub']:.2f}₽</b>")
+                async with session.get("https://www.cbr-xml-daily.ru/daily_json.js") as r:
+                    if r.status == 200:
+                        data = await r.json()
+                        usd = data["Valute"]["USD"]["Value"]
+                        eur = data["Valute"]["EUR"]["Value"]
+                        cny = data["Valute"]["CNY"]["Value"]
+                        lines.append(f"🇺🇸 USD: <b>{usd:.2f}₽</b>")
+                        lines.append(f"🇪🇺 EUR: <b>{eur:.2f}₽</b>")
+                        lines.append(f"🇨🇳 CNY: <b>{cny:.2f}₽</b>")
+                        got_any = True
+                    else:
+                        logging.error(f"CBR status: {r.status}")
             except Exception as e:
-                logging.error(f"coingecko: {e}")
+                logging.error(f"cbr: {e}")
+
+            # === CoinCap — бесплатный API без ключа ===
+            try:
+                # USDT
+                async with session.get("https://api.coincap.io/v2/assets/tether") as r:
+                    if r.status == 200:
+                        data = await r.json()
+                        price_usd = float(data["data"]["priceUsd"])
+                        # Пересчёт в рубли через ЦБ USD, если есть
+                        async with session.get("https://www.cbr-xml-daily.ru/daily_json.js") as r2:
+                            cbr = await r2.json()
+                            usd_rub = cbr["Valute"]["USD"]["Value"]
+                        usdt_rub = price_usd * usd_rub
+                        lines.append(f"💵 USDT: <b>{usdt_rub:.2f}₽</b>")
+                        got_any = True
+                    else:
+                        logging.error(f"CoinCap USDT status: {r.status}")
+            except Exception as e:
+                logging.error(f"coincap tether: {e}")
+
+            try:
+                # TON (The Open Network)
+                async with session.get("https://api.coincap.io/v2/assets/the-open-network") as r:
+                    if r.status == 200:
+                        data = await r.json()
+                        price_usd = float(data["data"]["priceUsd"])
+                        async with session.get("https://www.cbr-xml-daily.ru/daily_json.js") as r2:
+                            cbr = await r2.json()
+                            usd_rub = cbr["Valute"]["USD"]["Value"]
+                        ton_rub = price_usd * usd_rub
+                        lines.append(f"💎 TON (GRAM): <b>{ton_rub:.2f}₽</b>")
+                        got_any = True
+                    else:
+                        logging.error(f"CoinCap TON status: {r.status}")
+            except Exception as e:
+                logging.error(f"coincap ton: {e}")
+
     except Exception as e:
-        logging.error(f"cbr: {e}")
+        logging.error(f"fetch_prices outer: {e}")
+
+    if not got_any:
         return "❌ Не удалось получить курсы"
+
     lines.append("━━━━━━━━━━━━━━━━━━━━")
     return "\n".join(lines)
 
@@ -910,9 +981,7 @@ async def business_msg(message: types.Message):
         is_incoming = message.from_user and message.from_user.id != owner_id_of_conn
         is_from_owner = message.from_user and message.from_user.id == owner_id_of_conn
 
-        # =========================================================
-        #  ПРОВЕРКА МУТА: если собеседник замучен — удаляем его сообщения
-        # =========================================================
+        # ПРОВЕРКА МУТА
         if is_incoming:
             muted_until = mutes.get(message.from_user.id)
             if not muted_until:
@@ -924,7 +993,7 @@ async def business_msg(message: types.Message):
                     logging.info(f"🔇 Удалено сообщение замученного (user={message.from_user.id})")
                 except Exception as e:
                     logging.error(f"mute del: {e}")
-                return  # дальше не обрабатываем
+                return
 
         # GHOST
         if ghost_chats.get(chat_id) and is_incoming and not text.startswith("."):
@@ -1001,11 +1070,7 @@ async def business_msg(message: types.Message):
                 if len(parts) < 3:
                     await delete_cmd(message)
                     styles_list = ", ".join(f"<code>{s}</code>" for s in TYPE_STYLES.keys())
-                    await send_confirm(
-                        chat_id,
-                        f"❌ Укажи стиль:\n<code>.type on bold</code>\n\n"
-                        f"Доступные: {styles_list}",
-                        conn_id)
+                    await send_confirm(chat_id, f"❌ Укажи стиль:\n<code>.type on bold</code>\n\nДоступные: {styles_list}", conn_id)
                     return
                 style = parts[2].lower()
                 if style not in TYPE_STYLES:
