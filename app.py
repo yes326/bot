@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 AntiSpam Defender Bot — Business-бот.
-+ price: ЦБ РФ + CoinCap
++ price: ЦБ РФ + CoinPaprika
 + монотонный счётчик
 + счётчик в описании бота (Bio)
 + .type, .spam 0.15, удаление сообщений замученных
@@ -497,8 +497,9 @@ def calc_expr(expr: str):
         return None
 
 
-# ================== КУРСЫ: ЦБ РФ + CoinCap ==================
+# ================== КУРСЫ: ЦБ РФ + CoinPaprika ==================
 async def fetch_prices() -> str:
+    """ЦБ РФ (USD, EUR, CNY) + CoinPaprika (USDT, TON)."""
     lines = ["💱 <b>Курсы валют к рублю</b>", "━━━━━━━━━━━━━━━━━━━━"]
     got_any = False
     usd_rub = None
@@ -523,33 +524,33 @@ async def fetch_prices() -> str:
             except Exception as e:
                 logging.error(f"cbr: {e}")
 
-            # === CoinCap USDT ===
+            # === CoinPaprika USDT ===
             try:
-                async with session.get("https://api.coincap.io/v2/assets/tether") as r:
+                async with session.get("https://api.coinpaprika.com/v1/tickers/usdt-tether") as r:
                     if r.status == 200:
                         data = await r.json()
-                        price_usd = float(data["data"]["priceUsd"])
+                        price_usd = float(data["quotes"]["USD"]["price"])
                         if usd_rub:
                             lines.append(f"💵 USDT: <b>{price_usd * usd_rub:.2f}₽</b>")
                             got_any = True
                     else:
-                        logging.error(f"CoinCap USDT status: {r.status}")
+                        logging.error(f"CoinPaprika USDT status: {r.status}")
             except Exception as e:
-                logging.error(f"coincap tether: {e}")
+                logging.error(f"coinpaprika usdt: {e}")
 
-            # === CoinCap TON ===
+            # === CoinPaprika TON ===
             try:
-                async with session.get("https://api.coincap.io/v2/assets/the-open-network") as r:
+                async with session.get("https://api.coinpaprika.com/v1/tickers/ton-toncoin") as r:
                     if r.status == 200:
                         data = await r.json()
-                        price_usd = float(data["data"]["priceUsd"])
+                        price_usd = float(data["quotes"]["USD"]["price"])
                         if usd_rub:
                             lines.append(f"💎 TON (GRAM): <b>{price_usd * usd_rub:.2f}₽</b>")
                             got_any = True
                     else:
-                        logging.error(f"CoinCap TON status: {r.status}")
+                        logging.error(f"CoinPaprika TON status: {r.status}")
             except Exception as e:
-                logging.error(f"coincap ton: {e}")
+                logging.error(f"coinpaprika ton: {e}")
 
     except Exception as e:
         logging.error(f"fetch_prices outer: {e}")
@@ -633,7 +634,6 @@ def wordle_marks(word: str, guess: str) -> str:
 
 # ================== ФОНОВЫЕ ЗАДАЧИ ==================
 def pluralize_users(n: int) -> str:
-    """1 пользователь / 2 пользователя / 5 пользователей."""
     num_str = f"{n:,}".replace(",", " ")
     n_mod100 = n % 100
     n_mod10 = n % 10
@@ -667,7 +667,6 @@ async def update_bot_name():
 
 
 async def update_bot_description():
-    """Обновляет описание бота (Bio) со счётчиком."""
     try:
         total = await get_total_users()
         pretty = pluralize_users(total)
