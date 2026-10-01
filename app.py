@@ -2,8 +2,8 @@
 """
 AntiSpam Defender Bot — Business-бот.
 + price: ЦБ РФ + CoinPaprika
-+ монотонный счётчик (env + meta)
-+ Bio + short_description
++ Bio со счётчиком пользователей
++ имя бота без счётчика
 """
 
 import os
@@ -111,7 +111,7 @@ deleted_by_bot = set()
 type_styles = {}
 
 _monotonic_count = ENV_MAX_SEEN
-_last_bio = ""  # кэш последнего успешного описания
+_last_bio = ""
 
 
 # ================== СТИЛИ ==================
@@ -493,7 +493,7 @@ def calc_expr(expr: str):
         return None
 
 
-# ================== КУРСЫ: ЦБ РФ + CoinPaprika (fallback) ==================
+# ================== КУРСЫ ==================
 async def fetch_prices() -> str:
     lines = ["💱 <b>Курсы валют к рублю</b>", "━━━━━━━━━━━━━━━━━━━━"]
     got_any = False
@@ -659,12 +659,9 @@ def pluralize_users(n: int) -> str:
 
 
 async def update_bot_name():
+    """Имя бота — без счётчика."""
     try:
-        total = await get_total_users()
-        # Имя с юзером — до 64 символов
-        new_name = f"AntiSpam Defender | {total} 👥"
-        if len(new_name) > 64:
-            new_name = f"AntiSpam | {total}"
+        new_name = "AntiSpam Defender"
         await bot(SetMyName(name=new_name))
         logging.info(f"🏷 Имя бота: {new_name}")
         return True
@@ -678,13 +675,12 @@ async def update_bot_name():
 
 
 async def update_bot_description():
-    """Обновляет Bio и short_description."""
+    """Bio со счётчиком."""
     global _last_bio
     try:
         total = await get_total_users()
         pretty = pluralize_users(total)
 
-        # Bio (описание) — до 512 символов
         desc = (
             "🛡 AntiSpam Defender\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
@@ -701,7 +697,6 @@ async def update_bot_description():
         except Exception as e1:
             err1 = str(e1)
             logging.error(f"❌ setMyDescription: {err1}")
-            # fallback — short description
             try:
                 short = f"🛡 AntiSpam Defender · 👥 {pretty}"
                 if len(short) > 120:
