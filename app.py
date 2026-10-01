@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 AntiSpam Defender Bot — Business-бот.
-+ price: ЦБ РФ + CoinPaprika
++ price: ЦБ РФ + CoinPaprika (с fallback)
 + монотонный счётчик
 + счётчик в описании бота (Bio)
-+ .type, .spam 0.15, удаление сообщений замученных
 """
 
 import os
@@ -497,66 +496,79 @@ def calc_expr(expr: str):
         return None
 
 
-# ================== КУРСЫ: ЦБ РФ + CoinPaprika ==================
+# ================== КУРСЫ: ЦБ РФ + CoinPaprika (fallback) ==================
 async def fetch_prices() -> str:
     """ЦБ РФ (USD, EUR, CNY) + CoinPaprika (USDT, TON)."""
     lines = ["💱 <b>Курсы валют к рублю</b>", "━━━━━━━━━━━━━━━━━━━━"]
     got_any = False
     usd_rub = None
+    errors = []
 
+    # === ЦБ РФ ===
     try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
-            # === ЦБ РФ ===
-            try:
-                async with session.get("https://www.cbr-xml-daily.ru/daily_json.js") as r:
-                    if r.status == 200:
-                        data = await r.json()
-                        usd = data["Valute"]["USD"]["Value"]
-                        eur = data["Valute"]["EUR"]["Value"]
-                        cny = data["Valute"]["CNY"]["Value"]
-                        usd_rub = usd
-                        lines.append(f"🇺🇸 USD: <b>{usd:.2f}₽</b>")
-                        lines.append(f"🇪🇺 EUR: <b>{eur:.2f}₽</b>")
-                        lines.append(f"🇨🇳 CNY: <b>{cny:.2f}₽</b>")
-                        got_any = True
-                    else:
-                        logging.error(f"CBR status: {r.status}")
-            except Exception as e:
-                logging.error(f"cbr: {e}")
-
-            # === CoinPaprika USDT ===
-            try:
-                async with session.get("https://api.coinpaprika.com/v1/tickers/usdt-tether") as r:
-                    if r.status == 200:
-                        data = await r.json()
-                        price_usd = float(data["quotes"]["USD"]["price"])
-                        if usd_rub:
-                            lines.append(f"💵 USDT: <b>{price_usd * usd_rub:.2f}₽</b>")
-                            got_any = True
-                    else:
-                        logging.error(f"CoinPaprika USDT status: {r.status}")
-            except Exception as e:
-                logging.error(f"coinpaprika usdt: {e}")
-
-            # === CoinPaprika TON ===
-            try:
-                async with session.get("https://api.coinpaprika.com/v1/tickers/ton-toncoin") as r:
-                    if r.status == 200:
-                        data = await r.json()
-                        price_usd = float(data["quotes"]["USD"]["price"])
-                        if usd_rub:
-                            lines.append(f"💎 TON (GRAM): <b>{price_usd * usd_rub:.2f}₽</b>")
-                            got_any = True
-                    else:
-                        logging.error(f"CoinPaprika TON status: {r.status}")
-            except Exception as e:
-                logging.error(f"coinpaprika ton: {e}")
-
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get("https://www.cbr-xml-daily.ru/daily_json.js") as r:
+                logging.info(f"cbr status: {r.status}")
+                if r.status == 200:
+                    data = await r.json()
+                    usd = data["Valute"]["USD"]["Value"]
+                    eur = data["Valute"]["EUR"]["Value"]
+                    cny = data["Valute"]["CNY"]["Value"]
+                    usd_rub = usd
+                    lines.append(f"🇺🇸 USD: <b>{usd:.2f}₽</b>")
+                    lines.append(f"🇪🇺 EUR: <b>{eur:.2f}₽</b>")
+                    lines.append(f"🇨🇳 CNY: <b>{cny:.2f}₽</b>")
+                    got_any = True
+                else:
+                    errors.append(f"cbr={r.status}")
     except Exception as e:
-        logging.error(f"fetch_prices outer: {e}")
+        logging.error(f"cbr: {type(e).__name__}: {e}")
+        errors.append(f"cbr:{type(e).__name__}")
+
+    # === CoinPaprika USDT ===
+    try:
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get("https://api.coinpaprika.com/v1/tickers/usdt-tether") as r:
+                logging.info(f"coinpaprika usdt status: {r.status}")
+                if r.status == 200:
+                    data = await r.json()
+                    price_usd = float(data["quotes"]["USD"]["price"])
+                    if usd_rub:
+                        lines.append(f"💵 USDT: <b>{price_usd * usd_rub:.2f}₽</b>")
+                    else:
+                        lines.append(f"💵 USDT: <b>${price_usd:.4f}</b>")
+                    got_any = True
+                else:
+                    errors.append(f"usdt={r.status}")
+    except Exception as e:
+        logging.error(f"coinpaprika usdt: {type(e).__name__}: {e}")
+        errors.append(f"usdt:{type(e).__name__}")
+
+    # === CoinPaprika TON ===
+    try:
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get("https://api.coinpaprika.com/v1/tickers/ton-toncoin") as r:
+                logging.info(f"coinpaprika ton status: {r.status}")
+                if r.status == 200:
+                    data = await r.json()
+                    price_usd = float(data["quotes"]["USD"]["price"])
+                    if usd_rub:
+                        lines.append(f"💎 TON (GRAM): <b>{price_usd * usd_rub:.2f}₽</b>")
+                    else:
+                        lines.append(f"💎 TON (GRAM): <b>${price_usd:.4f}</b>")
+                    got_any = True
+                else:
+                    errors.append(f"ton={r.status}")
+    except Exception as e:
+        logging.error(f"coinpaprika ton: {type(e).__name__}: {e}")
+        errors.append(f"ton:{type(e).__name__}")
 
     if not got_any:
-        return "❌ Не удалось получить курсы"
+        err_text = ", ".join(errors) if errors else "no_errors"
+        return f"❌ Не удалось получить курсы\n<code>{err_text}</code>"
 
     lines.append("━━━━━━━━━━━━━━━━━━━━")
     return "\n".join(lines)
