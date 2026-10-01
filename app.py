@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 AntiSpam Defender Bot — Business-бот.
-+ price: ЦБ РФ + CoinCap (без ключа)
-+ монотонный счётчик (не падает в 0)
++ price: ЦБ РФ + CoinCap
++ монотонный счётчик
++ счётчик в описании бота (Bio)
 + .type, .spam 0.15, удаление сообщений замученных
 """
 
@@ -48,7 +49,6 @@ WARN_MUTE_MINUTES = 60
 BOT_RATE_LIMIT = 5
 BOT_RATE_WINDOW = 60
 
-# минимум для счётчика (задать через env в Render)
 ENV_MAX_SEEN = int(os.environ.get("MAX_SEEN_COUNT", "0"))
 
 ZWSP = "\u200b"
@@ -111,7 +111,6 @@ processed_updates = {}
 deleted_by_bot = set()
 type_styles = {}
 
-# Монотонный счётчик — не падает ниже этого значения
 _monotonic_count = ENV_MAX_SEEN
 
 
@@ -157,20 +156,15 @@ async def register_user(user_id, username, first_name):
 
 
 async def get_total_users():
-    """Монотонный счётчик: max(COUNT(*), env, сохранённый в meta)."""
     global _monotonic_count
     async with aiosqlite.connect(DB_PATH) as db:
-        # Считаем из users
         cur = await db.execute("SELECT COUNT(*) FROM users")
         row = await cur.fetchone()
         count = row[0] if row else 0
-        # Читаем сохранённый максимум
         cur = await db.execute("SELECT value FROM meta WHERE key='max_seen_count'")
         row = await cur.fetchone()
         saved = int(row[0]) if row and row[0] else 0
-        # Итог: max из всех источников
         result = max(count, saved, ENV_MAX_SEEN, _monotonic_count)
-        # Обновляем сохранённый максимум
         if result > saved:
             await db.execute(
                 "INSERT OR REPLACE INTO meta (key, value) VALUES ('max_seen_count', ?)",
@@ -505,12 +499,12 @@ def calc_expr(expr: str):
 
 # ================== КУРСЫ: ЦБ РФ + CoinCap ==================
 async def fetch_prices() -> str:
-    """ЦБ РФ (USD, EUR, CNY) + CoinCap (USDT, TON)."""
     lines = ["💱 <b>Курсы валют к рублю</b>", "━━━━━━━━━━━━━━━━━━━━"]
     got_any = False
+    usd_rub = None
 
     try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
             # === ЦБ РФ ===
             try:
                 async with session.get("https://www.cbr-xml-daily.ru/daily_json.js") as r:
@@ -519,6 +513,7 @@ async def fetch_prices() -> str:
                         usd = data["Valute"]["USD"]["Value"]
                         eur = data["Valute"]["EUR"]["Value"]
                         cny = data["Valute"]["CNY"]["Value"]
+                        usd_rub = usd
                         lines.append(f"🇺🇸 USD: <b>{usd:.2f}₽</b>")
                         lines.append(f"🇪🇺 EUR: <b>{eur:.2f}₽</b>")
                         lines.append(f"🇨🇳 CNY: <b>{cny:.2f}₽</b>")
@@ -528,37 +523,29 @@ async def fetch_prices() -> str:
             except Exception as e:
                 logging.error(f"cbr: {e}")
 
-            # === CoinCap — бесплатный API без ключа ===
+            # === CoinCap USDT ===
             try:
-                # USDT
                 async with session.get("https://api.coincap.io/v2/assets/tether") as r:
                     if r.status == 200:
                         data = await r.json()
                         price_usd = float(data["data"]["priceUsd"])
-                        # Пересчёт в рубли через ЦБ USD, если есть
-                        async with session.get("https://www.cbr-xml-daily.ru/daily_json.js") as r2:
-                            cbr = await r2.json()
-                            usd_rub = cbr["Valute"]["USD"]["Value"]
-                        usdt_rub = price_usd * usd_rub
-                        lines.append(f"💵 USDT: <b>{usdt_rub:.2f}₽</b>")
-                        got_any = True
+                        if usd_rub:
+                            lines.append(f"💵 USDT: <b>{price_usd * usd_rub:.2f}₽</b>")
+                            got_any = True
                     else:
                         logging.error(f"CoinCap USDT status: {r.status}")
             except Exception as e:
                 logging.error(f"coincap tether: {e}")
 
+            # === CoinCap TON ===
             try:
-                # TON (The Open Network)
                 async with session.get("https://api.coincap.io/v2/assets/the-open-network") as r:
                     if r.status == 200:
                         data = await r.json()
                         price_usd = float(data["data"]["priceUsd"])
-                        async with session.get("https://www.cbr-xml-daily.ru/daily_json.js") as r2:
-                            cbr = await r2.json()
-                            usd_rub = cbr["Valute"]["USD"]["Value"]
-                        ton_rub = price_usd * usd_rub
-                        lines.append(f"💎 TON (GRAM): <b>{ton_rub:.2f}₽</b>")
-                        got_any = True
+                        if usd_rub:
+                            lines.append(f"💎 TON (GRAM): <b>{price_usd * usd_rub:.2f}₽</b>")
+                            got_any = True
                     else:
                         logging.error(f"CoinCap TON status: {r.status}")
             except Exception as e:
@@ -644,7 +631,23 @@ def wordle_marks(word: str, guess: str) -> str:
     return "".join(marks)
 
 
-# ================== ФОНОВАЯ ЗАДАЧА ==================
+# ================== ФОНОВЫЕ ЗАДАЧИ ==================
+def pluralize_users(n: int) -> str:
+    """1 пользователь / 2 пользователя / 5 пользователей."""
+    num_str = f"{n:,}".replace(",", " ")
+    n_mod100 = n % 100
+    n_mod10 = n % 10
+    if 11 <= n_mod100 <= 19:
+        word = "пользователей"
+    elif n_mod10 == 1:
+        word = "пользователь"
+    elif 2 <= n_mod10 <= 4:
+        word = "пользователя"
+    else:
+        word = "пользователей"
+    return f"{num_str} {word}"
+
+
 async def update_bot_name():
     try:
         total = await get_total_users()
@@ -663,15 +666,41 @@ async def update_bot_name():
         return False
 
 
+async def update_bot_description():
+    """Обновляет описание бота (Bio) со счётчиком."""
+    try:
+        total = await get_total_users()
+        pretty = pluralize_users(total)
+        desc = (
+            "🛡 AntiSpam Defender — защита бизнес-чатов "
+            "от спама и нежелательных сообщений.\n\n"
+            f"👥 {pretty}"
+        )
+        if len(desc) > 512:
+            desc = desc[:509] + "..."
+        await bot.set_my_description(description=desc)
+        logging.info(f"📝 Описание: {pretty}")
+        return True
+    except Exception as e:
+        err = str(e)
+        if "Flood control" in err or "Too Many Requests" in err:
+            logging.warning(f"⏳ Flood control на setMyDescription")
+        else:
+            logging.error(f"❌ setMyDescription: {e}")
+        return False
+
+
 async def background_name_updater():
     await asyncio.sleep(300)
     ok = await update_bot_name()
+    await update_bot_description()
     while True:
         if ok:
             await asyncio.sleep(NAME_UPDATE_INTERVAL)
         else:
             await asyncio.sleep(7200)
         ok = await update_bot_name()
+        await update_bot_description()
 
 
 # ================== ПОДПИСКА ==================
@@ -1850,7 +1879,7 @@ async def main():
     logging.info("✅ БД инициализирована")
 
     asyncio.create_task(background_name_updater())
-    logging.info("✅ Фоновый апдейтер имени запущен")
+    logging.info("✅ Фоновый апдейтер запущен")
 
     threading.Thread(target=run_flask, daemon=True).start()
     logging.info("✅ Flask запущен")
