@@ -2,8 +2,8 @@
 """
 AntiSpam Defender Bot — Business-бот.
 + price: ЦБ РФ + CoinPaprika
-+ Bio со счётчиком пользователей
-+ имя бота без счётчика
++ Bio со счётчиком
++ .weather / .roll / .coin / .8ball / .translate
 """
 
 import os
@@ -112,6 +112,53 @@ type_styles = {}
 
 _monotonic_count = ENV_MAX_SEEN
 _last_bio = ""
+
+
+# ================== 8-BALL ==================
+EIGHTBALL_ANSWERS = [
+    "🎱 Да, определённо.",
+    "🎱 Без сомнений.",
+    "🎱 Всё говорит о том, что да.",
+    "🎱 Скорее всего, да.",
+    "🎱 Знаки говорят — да.",
+    "🎱 Пока не ясно, попробуй ещё.",
+    "🎱 Спроси позже.",
+    "🎱 Лучше не говорить сейчас.",
+    "🎱 Не могу предсказать.",
+    "🎱 Сконцентрируйся и спроси снова.",
+    "🎱 Не рассчитывай на это.",
+    "🎱 Мой ответ — нет.",
+    "🎱 По моим данным — нет.",
+    "🎱 Весьма сомнительно.",
+]
+
+# ================== WEATHER CODE MAP ==================
+WEATHER_CODES = {
+    0: "☀️ Ясно",
+    1: "🌤 Преимущественно ясно",
+    2: "⛅ Переменная облачность",
+    3: "☁️ Пасмурно",
+    45: "🌫 Туман",
+    48: "🌫 Туман с инеем",
+    51: "🌦 Морось слабая",
+    53: "🌦 Морось",
+    55: "🌧 Морось сильная",
+    61: "🌧 Дождь слабый",
+    63: "🌧 Дождь",
+    65: "🌧 Дождь сильный",
+    71: "🌨 Снег слабый",
+    73: "🌨 Снег",
+    75: "❄️ Снег сильный",
+    77: "🌨 Снежные зёрна",
+    80: "🌦 Ливень слабый",
+    81: "🌧 Ливень",
+    82: "⛈ Ливень сильный",
+    85: "🌨 Снегопад",
+    86: "❄️ Снегопад сильный",
+    95: "⛈ Гроза",
+    96: "⛈ Гроза с градом",
+    99: "⛈ Гроза с сильным градом",
+}
 
 
 # ================== СТИЛИ ==================
@@ -381,6 +428,94 @@ def cache_message(message):
         logging.error(f"cache_message: {e}")
 
 
+# ================== WEATHER ==================
+async def get_weather(city: str):
+    """Погода через open-meteo (бесплатно, без ключа)."""
+    try:
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            # Геокодинг
+            geo_url = "https://geocoding-api.open-meteo.com/v1/search"
+            params = {"name": city, "count": 1, "language": "ru", "format": "json"}
+            async with session.get(geo_url, params=params) as r:
+                if r.status != 200:
+                    logging.error(f"geocoding status: {r.status}")
+                    return None
+                data = await r.json()
+                if not data.get("results"):
+                    return None
+                loc = data["results"][0]
+                lat = loc["latitude"]
+                lon = loc["longitude"]
+                name = loc.get("name", city)
+                country = loc.get("country", "")
+
+            # Погода
+            w_url = "https://api.open-meteo.com/v1/forecast"
+            params = {
+                "latitude": lat,
+                "longitude": lon,
+                "current": "temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,apparent_temperature",
+                "timezone": "auto",
+            }
+            async with session.get(w_url, params=params) as r:
+                if r.status != 200:
+                    logging.error(f"weather status: {r.status}")
+                    return None
+                wdata = await r.json()
+                cur = wdata.get("current", {})
+                temp = cur.get("temperature_2m")
+                feels = cur.get("apparent_temperature")
+                hum = cur.get("relative_humidity_2m")
+                wind = cur.get("wind_speed_10m")
+                code = cur.get("weather_code", 0)
+                desc = WEATHER_CODES.get(code, "🌡 Погода")
+
+                out = (
+                    f"🌍 <b>{name}</b>, {country}\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    f"{desc}\n"
+                    f"🌡 Температура: <b>{temp}°C</b>\n"
+                    f"🤔 Ощущается: <b>{feels}°C</b>\n"
+                    f"💧 Влажность: <b>{hum}%</b>\n"
+                    f"💨 Ветер: <b>{wind} км/ч</b>\n"
+                    "━━━━━━━━━━━━━━━━━━━━"
+                )
+                return out
+    except Exception as e:
+        logging.error(f"get_weather: {type(e).__name__}: {e}")
+        return None
+
+
+# ================== TRANSLATE ==================
+async def translate_text(text: str, target_lang: str = "ru"):
+    """Перевод через Google Translate free endpoint."""
+    try:
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            url = "https://translate.googleapis.com/translate_a/single"
+            params = {
+                "client": "gtx",
+                "sl": "auto",
+                "tl": target_lang,
+                "dt": "t",
+                "q": text,
+            }
+            async with session.get(url, params=params) as r:
+                if r.status != 200:
+                    logging.error(f"translate status: {r.status}")
+                    return None
+                data = await r.json()
+                if data and isinstance(data, list) and data[0]:
+                    translated = "".join(part[0] for part in data[0] if part and part[0])
+                    detected = data[2] if len(data) > 2 else "auto"
+                    return translated, detected
+                return None
+    except Exception as e:
+        logging.error(f"translate: {type(e).__name__}: {e}")
+        return None
+
+
 # ================== STORY ==================
 async def download_file(file_id: str):
     try:
@@ -500,7 +635,6 @@ async def fetch_prices() -> str:
     usd_rub = None
     errors = []
 
-    # === ЦБ РФ ===
     try:
         timeout = aiohttp.ClientTimeout(total=10)
         async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -522,7 +656,6 @@ async def fetch_prices() -> str:
         logging.error(f"cbr: {type(e).__name__}: {e}")
         errors.append(f"cbr:{type(e).__name__}")
 
-    # === CoinPaprika USDT ===
     try:
         timeout = aiohttp.ClientTimeout(total=10)
         async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -542,7 +675,6 @@ async def fetch_prices() -> str:
         logging.error(f"coinpaprika usdt: {type(e).__name__}: {e}")
         errors.append(f"usdt:{type(e).__name__}")
 
-    # === CoinPaprika TON (пробуем два ID) ===
     for ton_id in ("ton-toncoin", "toncoin"):
         try:
             timeout = aiohttp.ClientTimeout(total=10)
@@ -659,7 +791,6 @@ def pluralize_users(n: int) -> str:
 
 
 async def update_bot_name():
-    """Имя бота — без счётчика."""
     try:
         new_name = "AntiSpam Defender"
         await bot(SetMyName(name=new_name))
@@ -675,12 +806,10 @@ async def update_bot_name():
 
 
 async def update_bot_description():
-    """Bio со счётчиком."""
     global _last_bio
     try:
         total = await get_total_users()
         pretty = pluralize_users(total)
-
         desc = (
             "🛡 AntiSpam Defender\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
@@ -831,7 +960,14 @@ TEXT_CMD_LIST = (
     "• <code>.txt текст</code> — анимация печати\n"
     "• <code>.rps</code> — камень-ножницы-бумага\n"
     "• <code>.ttt</code> — крестики-нолики\n"
-    "• <code>.wordle слово</code> — угадай слово\n\n"
+    "• <code>.wordle слово</code> — угадай слово\n"
+    "• <code>.roll 2d6</code> — кубики\n"
+    "• <code>.coin</code> — орёл/решка\n"
+    "• <code>.8ball вопрос</code> — магический шар\n\n"
+    "🌐 <b>Полезное</b>\n"
+    "• <code>.price</code> — курсы валют\n"
+    "• <code>.weather Город</code> — погода\n"
+    "• <code>.translate текст</code> — перевод\n\n"
     "🖋 <b>Авто-шрифт</b>\n"
     "• <code>.type on bold</code> — жирный\n"
     "• <code>.type on italic</code> — курсив\n"
@@ -847,8 +983,6 @@ TEXT_CMD_LIST = (
     "• <code>.text</code> — «печатает» (5 сек)\n"
     "• <code>.photo</code> — «фото» (5 сек)\n"
     "• <code>.gs</code> — «голосовое» (5 сек)\n\n"
-    "💱 <b>Полезное</b>\n"
-    "• <code>.price</code> — курсы валют\n\n"
     "👻 <b>Приватность</b>\n"
     "• <code>.ghost on/off</code> — копия входящих в ЛС\n\n"
     "📸 <b>Медиа</b>\n"
@@ -1022,7 +1156,6 @@ async def business_msg(message: types.Message):
         is_incoming = message.from_user and message.from_user.id != owner_id_of_conn
         is_from_owner = message.from_user and message.from_user.id == owner_id_of_conn
 
-        # Проверка мута
         if is_incoming:
             muted_until = mutes.get(message.from_user.id)
             if not muted_until:
@@ -1036,7 +1169,6 @@ async def business_msg(message: types.Message):
                     logging.error(f"mute del: {e}")
                 return
 
-        # GHOST
         if ghost_chats.get(chat_id) and is_incoming and not text.startswith("."):
             try:
                 user = message.from_user
@@ -1050,7 +1182,6 @@ async def business_msg(message: types.Message):
             except Exception as e:
                 logging.error(f"ghost: {e}")
 
-        # ЭХО
         if echo_chats.get(chat_id) and is_incoming and text and not text.startswith("."):
             try:
                 await bot.send_message(chat_id=chat_id, text=text, business_connection_id=conn_id)
@@ -1058,7 +1189,6 @@ async def business_msg(message: types.Message):
                 logging.error(f"echo: {e}")
             return
 
-        # АВТО-ШРИФТ
         if is_from_owner and chat_id in type_styles and text and not text.startswith("."):
             style = type_styles.get(chat_id)
             if style and style in TYPE_STYLES:
@@ -1089,6 +1219,93 @@ async def business_msg(message: types.Message):
 
         parts = text.split()
         cmd = parts[0].lower()
+
+        # ---- .weather ----
+        if cmd == ".weather":
+            if len(parts) < 2:
+                await delete_cmd(message)
+                await send_confirm(chat_id, "❌ <code>.weather Город</code>", conn_id)
+                return
+            city = " ".join(parts[1:])
+            await delete_cmd(message)
+            await send_chat_action(chat_id, conn_id, "typing")
+            result = await get_weather(city)
+            if result:
+                await send_confirm(chat_id, result, conn_id)
+            else:
+                await send_confirm(chat_id, f"❌ Не нашёл город <b>{city}</b>", conn_id)
+            return
+
+        # ---- .translate ----
+        if cmd == ".translate":
+            if len(parts) < 2:
+                await delete_cmd(message)
+                await send_confirm(chat_id, "❌ <code>.translate текст</code>", conn_id)
+                return
+            src = " ".join(parts[1:])
+            await delete_cmd(message)
+            await send_chat_action(chat_id, conn_id, "typing")
+            result = await translate_text(src, "ru")
+            if result:
+                translated, detected = result
+                out = (
+                    f"🌐 <b>Перевод</b>\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    f"<i>Было ({detected}):</i>\n{src[:300]}\n\n"
+                    f"<i>Стало (ru):</i>\n{translated[:300]}\n"
+                    "━━━━━━━━━━━━━━━━━━━━"
+                )
+                await send_confirm(chat_id, out, conn_id)
+            else:
+                await send_confirm(chat_id, "❌ Не удалось перевести", conn_id)
+            return
+
+        # ---- .roll NdM ----
+        if cmd == ".roll":
+            await delete_cmd(message)
+            try:
+                dice = parts[1] if len(parts) > 1 else "1d6"
+                if "d" in dice.lower():
+                    n_str, m_str = dice.lower().split("d")
+                    n = max(1, min(int(n_str), 20))
+                    m = max(2, min(int(m_str), 1000))
+                else:
+                    n, m = 1, int(dice)
+            except Exception:
+                n, m = 1, 6
+            results = [random.randint(1, m) for _ in range(n)]
+            total = sum(results)
+            out = (
+                f"🎲 <b>Бросок {n}d{m}</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                f"Результаты: <code>{', '.join(str(x) for x in results)}</code>\n"
+                f"Сумма: <b>{total}</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━"
+            )
+            await send_confirm(chat_id, out, conn_id, 30)
+            return
+
+        # ---- .coin ----
+        if cmd == ".coin":
+            await delete_cmd(message)
+            side = random.choice(["🪙 Орёл", "🪙 Решка"])
+            await send_confirm(chat_id, f"<b>{side}</b>", conn_id, 15)
+            return
+
+        # ---- .8ball ----
+        if cmd == ".8ball":
+            await delete_cmd(message)
+            if len(parts) < 2:
+                await send_confirm(chat_id, "❌ <code>.8ball вопрос</code>", conn_id, 5)
+                return
+            question = " ".join(parts[1:])
+            answer = random.choice(EIGHTBALL_ANSWERS)
+            out = (
+                f"❓ <i>{question[:200]}</i>\n\n"
+                f"{answer}"
+            )
+            await send_confirm(chat_id, out, conn_id, 30)
+            return
 
         # ---- .type ----
         if cmd == ".type":
