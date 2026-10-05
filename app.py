@@ -29,7 +29,7 @@ def get_banner_path():
     if os.path.exists(BANNER_FALLBACK): return BANNER_FALLBACK
     return None
 
-business_owners = {}; subscriptions = {}; pending_payments = {}; used_trials = set()
+business_owners = {}; pending_payments = {}
 message_cache = {}; warns = {}; mutes = {}; clone = {}; warn_messages = {}
 referrals = {}; username_cache = {}; last_conn_by_chat = {}; nonmute_active = {}
 bot_rate = defaultdict(list); echo_chats = {}; ghost_chats = {}
@@ -45,6 +45,8 @@ async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT, first_name TEXT, joined_at TEXT)")
         await db.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
+        await db.execute("CREATE TABLE IF NOT EXISTS subscriptions (user_id INTEGER PRIMARY KEY, until TEXT)")
+        await db.execute("CREATE TABLE IF NOT EXISTS trials (user_id INTEGER PRIMARY KEY, used_at TEXT)")
         await db.commit()
 
 async def register_user(uid, un, fn):
@@ -71,6 +73,41 @@ async def get_last_users(limit=10):
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM users ORDER BY joined_at DESC LIMIT ?", (limit,))
         return await cur.fetchall()
+
+async def get_subscription(user_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT until FROM subscriptions WHERE user_id=?", (user_id,))
+        row = await cur.fetchone()
+        if not row or not row[0]: return None
+        try: return datetime.fromisoformat(row[0])
+        except: return None
+
+async def set_subscription(user_id, until_dt):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("INSERT OR REPLACE INTO subscriptions (user_id, until) VALUES (?,?)", (user_id, until_dt.isoformat()))
+        await db.commit()
+
+async def has_used_trial(user_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT 1 FROM trials WHERE user_id=?", (user_id,))
+        return (await cur.fetchone()) is not None
+
+async def mark_trial_used(user_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("INSERT OR IGNORE INTO trials (user_id, used_at) VALUES (?,?)", (user_id, datetime.now().isoformat()))
+        await db.commit()
+
+async def count_active_subs():
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT COUNT(*) FROM subscriptions WHERE until > ?", (datetime.now().isoformat(),))
+        row = await cur.fetchone()
+        return row[0] if row else 0
+
+async def count_trials():
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT COUNT(*) FROM trials")
+        row = await cur.fetchone()
+        return row[0] if row else 0
 
 flask_app = Flask(__name__)
 @flask_app.route('/')
@@ -407,8 +444,7 @@ def main_menu():
     return types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="📖 Команды", callback_data="cmd_list")],[types.InlineKeyboardButton(text="💎 Подписка", callback_data="sub_menu")],[types.InlineKeyboardButton(text="👥 Пригласить друга", callback_data="ref")],[types.InlineKeyboardButton(text="📚 Как подключить", callback_data="howto")]])
 def back_kb(): return types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="🔙 В меню", callback_data="back_main")]])
 def plans_kb(uid=None):
-    rows = []
-    if uid is not None and uid not in used_trials: rows.append([types.InlineKeyboardButton(text=f"🎁 Пробный период ({TRIAL_DAYS} дней)", callback_data="trial")])
+    rows = [[types.InlineKeyboardButton(text=f"🎁 Пробный период ({TRIAL_DAYS} дней)", callback_data="trial")]]
     for k,v in PRICES.items(): rows.append([types.InlineKeyboardButton(text=f"{v['label']} — {v['rub']}₽", callback_data=f"pay_{k}")])
     rows.append([types.InlineKeyboardButton(text="🔙 Назад", callback_data="back_main")])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
@@ -430,18 +466,19 @@ async def start_cmd(message):
             rid = int(args[1][4:])
             if rid != uid:
                 referrals.setdefault(rid, set()).add(uid)
-                now = datetime.now(); cur = subscriptions.get(rid, now)
-                subscriptions[rid] = max(cur, now) + timedelta(days=3)
+                now = datetime.now()
+                cur = await get_subscription(rid) or now
+                await set_subscription(rid, max(cur, now) + timedelta(days=3))
                 try: await bot.send_message(rid, "🎁 <b>Новый друг присоединился!</b>\n+3 дня", parse_mode="HTML")
                 except: pass
         except ValueError: pass
     if not await check_subscription(uid):
         await message.answer("⚠️ <b>Подпишись на канал для использования бота.</b>\n\n📢 Подпишись и нажми «✅ Я подписался».", parse_mode="HTML", reply_markup=subscribe_kb()); return
-    await send_photo_banner(message.chat.id, TEXT_MAIN_MENU, reply_markup=main_menu())
+    await send_photo_banner(message.chat.id, TEXT_MAIN_MENU, kb=main_menu())
 
 @dp.message(F.text == "/stats", F.from_user.id == OWNER_ID)
 async def stats_cmd(message):
-    total = await get_total_users(); with_sub = sum(1 for u in subscriptions if subscriptions[u] > datetime.now()); trials = len(used_trials)
+    total = await get_total_users(); with_sub = await count_active_subs(); trials = await count_trials()
     last = await get_last_users(10)
     text = f"📊 <b>Статистика</b>\n━━━━━━━━━━━━━━━━━━━━\n\n👥 Пользователей: <b>{total}</b>\n💎 Подписок: <b>{with_sub}</b>\n🎁 Триалов: <b>{trials}</b>\n\n🕐 <b>Последние 10:</b>\n"
     for row in last:
@@ -860,10 +897,12 @@ async def cb_cmds(call):
 
 @dp.callback_query(F.data == "sub_menu")
 async def cb_sub(call):
-    uid = call.from_user.id; now = datetime.now(); cur = subscriptions.get(uid)
+    uid = call.from_user.id; now = datetime.now()
+    cur = await get_subscription(uid)
     status = "❌ не активна"
     if cur and cur > now: status = f"✅ активна до {cur.strftime('%d.%m.%Y')}"
-    trial = f"🎁 Пробный период — {TRIAL_DAYS} дней\n\n" if uid not in used_trials else ""
+    used = await has_used_trial(uid)
+    trial = f"🎁 Пробный период — {TRIAL_DAYS} дней\n\n" if not used else ""
     try: await call.message.delete()
     except: pass
     await send_photo_banner(call.message.chat.id, f"💎 <b>Подписка</b>\n━━━━━━━━━━━━━━━━━━━━\n📌 Статус: <b>{status}</b>\n\n{trial}👇 <i>Выбери тариф:</i>", kb=plans_kb(uid))
@@ -871,9 +910,12 @@ async def cb_sub(call):
 @dp.callback_query(F.data == "trial")
 async def cb_trial(call):
     uid = call.from_user.id; now = datetime.now()
-    if uid in used_trials: await call.answer("❌ Уже использовал!", show_alert=True); return
-    if subscriptions.get(uid) and subscriptions[uid] > now: await call.answer("❌ Уже есть!", show_alert=True); return
-    used_trials.add(uid); until = now + timedelta(days=TRIAL_DAYS); subscriptions[uid] = until
+    if await has_used_trial(uid): await call.answer("❌ Уже использовал!", show_alert=True); return
+    cur = await get_subscription(uid)
+    if cur and cur > now: await call.answer("❌ Уже есть!", show_alert=True); return
+    await mark_trial_used(uid)
+    until = now + timedelta(days=TRIAL_DAYS)
+    await set_subscription(uid, until)
     try: await call.message.delete()
     except: pass
     await send_photo_banner(call.message.chat.id, f"🎁 <b>Пробный активирован!</b>\n━━━━━━━━━━━━━━━━━━━━\n💎 {TRIAL_DAYS} дней\n📅 До: <b>{until.strftime('%d.%m.%Y %H:%M')}</b>\n━━━━━━━━━━━━━━━━━━━━", kb=back_kb())
@@ -930,9 +972,11 @@ async def on_screenshot(message):
 async def cb_approve(call):
     if call.from_user.id != OWNER_ID: await call.answer("❌ Нет доступа", show_alert=True); return
     p = call.data.split("_"); uid = int(p[1]); plan = p[2]
-    days = PRICES[plan]["days"]; now = datetime.now(); cur = subscriptions.get(uid, now)
-    subscriptions[uid] = max(cur, now) + timedelta(days=days)
-    try: await bot.send_message(uid, f"✅ <b>Оплата подтверждена!</b>\n\n💎 {days} дней.", parse_mode="HTML")
+    days = PRICES[plan]["days"]; now = datetime.now()
+    cur = await get_subscription(uid) or now
+    until = max(cur, now) + timedelta(days=days)
+    await set_subscription(uid, until)
+    try: await bot.send_message(uid, f"✅ <b>Оплата подтверждена!</b>\n\n💎 {days} дней.\n📅 До: <b>{until.strftime('%d.%m.%Y')}</b>", parse_mode="HTML")
     except: pass
     await call.message.edit_caption(caption=f"{call.message.caption}\n\n✅ <b>Подтверждено</b>", parse_mode="HTML")
     await call.answer("✅")
