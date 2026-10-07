@@ -7,6 +7,8 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 from flask import Flask, request, jsonify, send_from_directory
 from aiogram import Bot, Dispatcher, types, F
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.methods import SetMyName
 from aiogram.types import (
@@ -208,7 +210,7 @@ async def count_trials():
         return row[0] if row else 0
 
 # ============================================================
-# ВАРНЫ / МУТЫ В БД
+# ВАРНЫ / МУТЫ
 # ============================================================
 async def db_get_warn(chat_id: int, user_id: int) -> int:
     async with aiosqlite.connect(DB_PATH) as db:
@@ -325,19 +327,13 @@ def api_status():
         maint = bool(row and row[0] == "1")
     except Exception:
         maint = False
-
     uptime = int(time.time() - _start_time)
     h = uptime // 3600
     m = (uptime % 3600) // 60
     uptime_text = f"В сети {h}ч {m}мин" if h else f"В сети {m}мин"
-
     return jsonify({
         "ok": True,
-        "status": {
-            "maintenance": maint,
-            "health": "ok",
-            "uptime_text": uptime_text,
-        }
+        "status": {"maintenance": maint, "health": "ok", "uptime_text": uptime_text}
     })
 
 @flask_app.route('/api/settings', methods=["GET"])
@@ -406,10 +402,10 @@ def run_flask():
     flask_app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)), use_reloader=False)
 
 # ============================================================
-# ЛОГИ + БОТ
+# ЛОГИ + БОТ (с HTML по умолчанию)
 # ============================================================
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-bot = Bot(token=BOT_TOKEN)
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher(storage=MemoryStorage())
 
 # ============================================================
@@ -456,13 +452,13 @@ async def delete_cmd(message):
     try:
         deleted_by_bot.add(message.message_id)
         await delete_business_msg(message.business_connection_id, [message.message_id])
-        logging.info(f"✅ Удалена команда: {(message.text or '')[:30]}")
+        logging.info(f"🤖 Бот удалил свою команду: {(message.text or '')[:30]} (id={message.message_id})")
     except Exception as e:
         logging.error(f"delete_cmd: {e}")
 
 async def send_confirm(cid, text, conn=None, sec=None, kb=None):
     try:
-        kw = {"chat_id": cid, "text": text, "parse_mode": "HTML"}
+        kw = {"chat_id": cid, "text": text}
         if conn: kw["business_connection_id"] = conn
         if kb: kw["reply_markup"] = kb
         msg = await bot.send_message(**kw)
@@ -497,7 +493,6 @@ async def send_photo_banner(cid, caption, conn=None, kb=None, pm="HTML"):
         return None
 
 async def broadcast_to_all_users(text: str):
-    """Рассылка всем пользователям из таблицы users. Возвращает (ok, fail)."""
     sent = 0; failed = 0
     try:
         async with aiosqlite.connect(DB_PATH) as db:
@@ -507,7 +502,7 @@ async def broadcast_to_all_users(text: str):
         logging.info(f"📢 Broadcast старт: {total} получателей")
         for (uid,) in rows:
             try:
-                await bot.send_message(uid, text, parse_mode="HTML")
+                await bot.send_message(uid, text)
                 sent += 1
             except Exception as e:
                 failed += 1
@@ -768,7 +763,7 @@ def pluralize(n):
     return f"{s} {w}"
 
 # ============================================================
-# ИМЯ И ОПИСАНИЕ
+# ИМЯ / ОПИСАНИЕ
 # ============================================================
 async def update_bot_name():
     try:
@@ -857,7 +852,7 @@ async def find_connection_by_target(t):
     return None, None
 
 # ============================================================
-# КЛАВИАТУРЫ И ТЕКСТЫ
+# МЕНЮ
 # ============================================================
 def main_menu():
     return types.InlineKeyboardMarkup(inline_keyboard=[
@@ -956,7 +951,7 @@ async def start_cmd(message: types.Message):
 
     if not await check_subscription(uid):
         await message.answer("⚠️ <b>Подпишись на канал, чтобы пользоваться ботом:</b>",
-                             reply_markup=subscribe_kb(), parse_mode="HTML")
+                             reply_markup=subscribe_kb())
         return
 
     await send_photo_banner(message.chat.id, TEXT_MAIN_MENU, kb=main_menu())
@@ -976,7 +971,7 @@ async def stats_cmd(message: types.Message):
         un = f"@{row['username']}" if row["username"] else ""
         text += f"• {name} {un} (<code>{row['user_id']}</code>)\n"
     text += "━━━━━━━━━━━━━━━━━━━━"
-    await message.answer(text, parse_mode="HTML")
+    await message.answer(text)
 
 # ============================================================
 # BUSINESS CONNECTION
@@ -1000,7 +995,7 @@ async def on_business_connection(conn: types.BusinessConnection):
         logging.error(f"on_business_connection: {e}")
 
 # ============================================================
-# УДАЛЕНИЕ / ИЗМЕНЕНИЕ
+# УДАЛЕНИЕ (не от бота, не от владельца)
 # ============================================================
 @dp.deleted_business_messages()
 async def on_deleted_messages(event: types.BusinessMessagesDeleted):
@@ -1008,13 +1003,27 @@ async def on_deleted_messages(event: types.BusinessMessagesDeleted):
         cid = event.chat.id; conn = event.business_connection_id
         owner_id_of_conn = await get_owner_id(conn)
         if not owner_id_of_conn: return
-        settings = await db_get_settings(owner_id_of_conn)
-        cached_all = message_cache.get(cid, {})
+
+        # Фильтруем удаления, инициированные ботом
+        real_deleted_ids = []
         for mid in event.message_ids:
             if mid in deleted_by_bot:
-                deleted_by_bot.discard(mid); continue
+                deleted_by_bot.discard(mid)
+                logging.info(f"⏭ Пропускаю удалённое ботом: {mid}")
+                continue
+            real_deleted_ids.append(mid)
+        if not real_deleted_ids:
+            return
+
+        settings = await db_get_settings(owner_id_of_conn)
+        cached_all = message_cache.get(cid, {})
+
+        for mid in real_deleted_ids:
             data = cached_all.get(mid)
             if not data: continue
+            # Если удалил сам владелец — не уведомляем
+            if data.get("from_id") == owner_id_of_conn:
+                continue
             if settings["notify_delete"]:
                 from_name = data.get("from_name", "—")
                 from_id = data.get("from_id")
@@ -1028,11 +1037,15 @@ async def on_deleted_messages(event: types.BusinessMessagesDeleted):
                     )
                 except Exception as e:
                     logging.error(f"notify_delete: {e}")
+
         if nonmute_active.get(cid, False):
             return
     except Exception as e:
         logging.error(f"on_deleted_messages: {e}")
 
+# ============================================================
+# ИЗМЕНЕНИЕ (не от владельца)
+# ============================================================
 @dp.edited_business_message()
 async def on_edited_business_msg(message: types.Message):
     try:
@@ -1040,13 +1053,21 @@ async def on_edited_business_msg(message: types.Message):
         if not conn: return
         owner_id_of_conn = await get_owner_id(conn)
         if not owner_id_of_conn: return
+
+        # Если редактирует сам владелец — не уведомляем, но обновляем кэш
+        if message.from_user and message.from_user.id == owner_id_of_conn:
+            cache_message(message)
+            return
+
         old = None
         cid = message.chat.id
         if cid in message_cache and message.message_id in message_cache[cid]:
             old = message_cache[cid][message.message_id]
         cache_message(message)
+
         settings = await db_get_settings(owner_id_of_conn)
         if not settings["notify_edit"]: return
+
         from_name = message.from_user.full_name if message.from_user else "—"
         from_id = message.from_user.id if message.from_user else "—"
         old_text = (old.get("text") if old else None) or "—"
@@ -1129,7 +1150,7 @@ async def business_msg(message: types.Message):
                 except Exception as e:
                     logging.error(f"style del: {e}")
                 try:
-                    await bot.send_message(cid, f"{o}{text}{cl}", parse_mode="HTML",
+                    await bot.send_message(cid, f"{o}{text}{cl}",
                                            business_connection_id=conn)
                 except Exception as e:
                     logging.error(f"style send: {e}")
@@ -1374,8 +1395,7 @@ async def business_msg(message: types.Message):
             s = " ".join(parts[1:])
             await delete_cmd(message)
             try:
-                await bot.send_message(cid, f"<b>{s}</b>", parse_mode="HTML",
-                                       business_connection_id=conn)
+                await bot.send_message(cid, f"<b>{s}</b>", business_connection_id=conn)
             except Exception as e:
                 logging.error(f"st: {e}")
             return
@@ -1467,7 +1487,7 @@ async def business_msg(message: types.Message):
                 img = qrcode.make(qt); buf = io.BytesIO(); img.save(buf, "PNG"); buf.seek(0)
                 await bot.send_photo(chat_id=cid, photo=BufferedInputFile(buf.read(), filename="qr.png"),
                                      caption=f"📱 <b>QR-код</b>\n<code>{qt[:80]}</code>",
-                                     parse_mode="HTML", business_connection_id=conn)
+                                     business_connection_id=conn)
             except Exception as e:
                 logging.error(f"QR: {e}")
                 await send_confirm(cid, "❌ Не удалось создать QR", conn, sec=5)
@@ -1652,8 +1672,7 @@ async def cb_rps(call: types.CallbackQuery):
     res = rps_res(player, bot_choice)
     try:
         await call.message.edit_text(
-            f"🎮 Ты: <b>{player}</b>\n🤖 Бот: <b>{bot_choice}</b>\n\n{res}",
-            parse_mode="HTML"
+            f"🎮 Ты: <b>{player}</b>\n🤖 Бот: <b>{bot_choice}</b>\n\n{res}"
         )
     except Exception: pass
     await call.answer()
@@ -1810,7 +1829,7 @@ async def on_screenshot(message: types.Message):
         await bot.send_photo(chat_id=OWNER_ID, photo=message.photo[-1].file_id,
                              caption=f"💰 <b>Оплата</b>\n\n👤 @{message.from_user.username or '—'} (<code>{uid}</code>)\n"
                                      f"📦 Тариф: <b>{p['label']}</b> — {p['rub']}₽",
-                             parse_mode="HTML", reply_markup=kb)
+                             reply_markup=kb)
         await message.answer("✅ Отправлено! Ждите подтверждения.")
     except Exception as e:
         logging.error(f"screenshot: {e}")
