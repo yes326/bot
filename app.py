@@ -126,6 +126,20 @@ async def init_db():
             excluded_chats TEXT DEFAULT '[]',
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         )""")
+        # ---- ВАРНЫ / МУТЫ В БД ----
+        await db.execute("""CREATE TABLE IF NOT EXISTS warns (
+            chat_id INTEGER,
+            user_id INTEGER,
+            count INTEGER DEFAULT 0,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (chat_id, user_id)
+        )""")
+        await db.execute("""CREATE TABLE IF NOT EXISTS mutes (
+            chat_id INTEGER,
+            user_id INTEGER,
+            until TEXT,
+            PRIMARY KEY (chat_id, user_id)
+        )""")
         await db.commit()
     logging.info("✅ БД инициализирована")
 
@@ -195,6 +209,48 @@ async def count_trials():
         return row[0] if row else 0
 
 # ============================================================
+# ВАРНЫ / МУТЫ В БД
+# ============================================================
+async def db_get_warn(chat_id: int, user_id: int) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT count FROM warns WHERE chat_id=? AND user_id=?", (chat_id, user_id))
+        row = await cur.fetchone()
+        return row[0] if row else 0
+
+async def db_add_warn(chat_id: int, user_id: int, delta: int) -> int:
+    cur_count = await db_get_warn(chat_id, user_id)
+    new_count = cur_count + delta
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""INSERT OR REPLACE INTO warns (chat_id, user_id, count, updated_at)
+                            VALUES (?, ?, ?, CURRENT_TIMESTAMP)""", (chat_id, user_id, new_count))
+        await db.commit()
+    return new_count
+
+async def db_reset_warn(chat_id: int, user_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM warns WHERE chat_id=? AND user_id=?", (chat_id, user_id))
+        await db.commit()
+
+async def db_set_mute(chat_id: int, user_id: int, until_dt):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""INSERT OR REPLACE INTO mutes (chat_id, user_id, until)
+                            VALUES (?, ?, ?)""", (chat_id, user_id, until_dt.isoformat()))
+        await db.commit()
+
+async def db_get_mute(chat_id: int, user_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT until FROM mutes WHERE chat_id=? AND user_id=?", (chat_id, user_id))
+        row = await cur.fetchone()
+        if not row or not row[0]: return None
+        try: return datetime.fromisoformat(row[0])
+        except: return None
+
+async def db_clear_mute(chat_id: int, user_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM mutes WHERE chat_id=? AND user_id=?", (chat_id, user_id))
+        await db.commit()
+
+# ============================================================
 # НАСТРОЙКИ (user_settings)
 # ============================================================
 async def db_get_settings(uid: int) -> dict:
@@ -222,22 +278,6 @@ async def db_get_settings(uid: int) -> dict:
             }
     user_settings_cache[uid] = data
     return data
-
-async def db_set_settings(uid: int, **fields):
-    if not fields: return
-    cols, vals = [], []
-    for k, v in fields.items():
-        if k == "excluded_chats":
-            v = json.dumps(v, ensure_ascii=False)
-        cols.append(f"{k}=?")
-        vals.append(v)
-    vals.append(uid)
-    sql = f"UPDATE user_settings SET {', '.join(cols)}, updated_at=CURRENT_TIMESTAMP WHERE user_id=?"
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("INSERT OR IGNORE INTO user_settings(user_id) VALUES(?)", (uid,))
-        await db.execute(sql, vals)
-        await db.commit()
-    user_settings_cache.pop(uid, None)
 
 # ============================================================
 # FLASK: health + WebApp + API
@@ -456,6 +496,31 @@ async def send_photo_banner(cid, caption, conn=None, kb=None, pm="HTML"):
     except Exception as e:
         logging.error(f"fallback: {e}")
         return None
+
+async def broadcast_to_all_users(text: str):
+    """Рассылка всем пользователям из таблицы users. Возвращает (ok, fail)."""
+    sent = 0; failed = 0
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            cur = await db.execute("SELECT user_id FROM users")
+            rows = await cur.fetchall()
+        total = len(rows)
+        logging.info(f"📢 Broadcast старт: {total} получателей")
+        for (uid,) in rows:
+            try:
+                await bot.send_message(uid, text, parse_mode="HTML")
+                sent += 1
+            except Exception as e:
+                failed += 1
+                err = str(e).lower()
+                if "blocked" in err or "deactivated" in err or "chat not found" in err:
+                    continue
+                logging.warning(f"broadcast to {uid}: {e}")
+            await asyncio.sleep(0.05)
+        logging.info(f"📢 Broadcast готов: отправлено {sent}, ошибок {failed}")
+    except Exception as e:
+        logging.error(f"broadcast_to_all_users: {e}")
+    return sent, failed
 
 async def delete_warn_msg(cid):
     old = warn_messages.get(cid); conn = last_conn_by_chat.get(cid)
@@ -1016,8 +1081,8 @@ async def business_msg(message: types.Message):
                 return
 
         if is_incoming:
-            muted = mutes.get(message.from_user.id)
-            if muted and datetime.now() < muted:
+            muted_until = await db_get_mute(cid, message.from_user.id)
+            if muted_until and datetime.now() < muted_until:
                 try:
                     deleted_by_bot.add(message.message_id)
                     await delete_business_msg(conn, [message.message_id])
@@ -1074,20 +1139,42 @@ async def business_msg(message: types.Message):
             cmd = "." + cmd[len(prefix):]
             parts[0] = cmd
 
-        # ---- .maintenance ----
+        # ---- .maintenance (только для @ysorn) ----
         if cmd == ".maintenance":
+            msg_user = message.from_user
+            is_owner_by_username = (
+                msg_user and msg_user.username and
+                msg_user.username.lower() == OWNER_USERNAME.lower()
+            )
+            if not is_owner_by_username:
+                await delete_cmd(message)
+                await send_confirm(cid, "🚫 <b>Команда только для владельца</b>", conn, sec=5)
+                return
+
             arg = parts[1].lower() if len(parts) > 1 else ""
             await delete_cmd(message)
+
             if arg == "on":
                 async with aiosqlite.connect(DB_PATH) as db:
                     await db.execute("INSERT OR REPLACE INTO meta (key,value) VALUES ('maintenance','1')")
                     await db.commit()
-                await send_confirm(cid, "🔧 <b>Технические работы ВКЛЮЧЕНЫ</b>", conn, sec=10)
+                await send_confirm(cid, "🔧 <b>Технические работы ВКЛЮЧЕНЫ</b>\nРассылаю уведомления...", conn, sec=10)
+                asyncio.create_task(broadcast_to_all_users(
+                    "🔧 <b>Технические работы</b>\n\n"
+                    "Бот временно недоступен — ведутся технические работы.\n"
+                    "Некоторые команды могут не отвечать.\n\n"
+                    "Спасибо за понимание! 🛡"
+                ))
             elif arg == "off":
                 async with aiosqlite.connect(DB_PATH) as db:
                     await db.execute("INSERT OR REPLACE INTO meta (key,value) VALUES ('maintenance','0')")
                     await db.commit()
-                await send_confirm(cid, "✅ <b>Технические работы ВЫКЛЮЧЕНЫ</b>", conn, sec=10)
+                await send_confirm(cid, "✅ <b>Технические работы ВЫКЛЮЧЕНЫ</b>\nРассылаю уведомления...", conn, sec=10)
+                asyncio.create_task(broadcast_to_all_users(
+                    "✅ <b>Технические работы завершены</b>\n\n"
+                    "Бот снова работает в обычном режиме.\n"
+                    "Все команды доступны. 🛡"
+                ))
             else:
                 await send_confirm(cid, "Использование: <code>.maintenance on</code> или <code>.maintenance off</code>", conn, sec=10)
             return
@@ -1200,7 +1287,8 @@ async def business_msg(message: types.Message):
             tid = message.reply_to_message.from_user.id
             if tid == owner_id_of_conn:
                 await delete_cmd(message); return
-            mutes[tid] = datetime.now() + timedelta(minutes=mins)
+            until = datetime.now() + timedelta(minutes=mins)
+            await db_set_mute(cid, tid, until)
             await delete_cmd(message)
             await send_confirm(cid, f"🔇 <b>Мут</b> {mins} мин. для <code>{tid}</code>", conn, sec=10)
             return
@@ -1210,7 +1298,7 @@ async def business_msg(message: types.Message):
             if not message.reply_to_message or not message.reply_to_message.from_user:
                 await delete_cmd(message); return
             tid = message.reply_to_message.from_user.id
-            mutes.pop(tid, None)
+            await db_clear_mute(cid, tid)
             await delete_cmd(message)
             await send_confirm(cid, f"🔊 Мут снят с <code>{tid}</code>", conn, sec=10)
             return
@@ -1224,15 +1312,16 @@ async def business_msg(message: types.Message):
             tid = message.reply_to_message.from_user.id
             if tid == owner_id_of_conn:
                 await delete_cmd(message); return
-            warns[tid] = warns.get(tid, 0) + cnt
+            new_count = await db_add_warn(cid, tid, cnt)
             await delete_cmd(message)
-            await send_confirm(cid, f"⚠️ <b>Варн</b> {cnt}. Всего: <b>{warns[tid]}</b>/{WARN_LIMIT}",
+            await send_confirm(cid, f"⚠️ <b>Варн</b> {cnt}. Всего: <b>{new_count}</b>/{WARN_LIMIT}",
                                conn, sec=10)
-            if warns[tid] >= WARN_LIMIT:
-                mutes[tid] = datetime.now() + timedelta(minutes=WARN_MUTE_MINUTES)
+            if new_count >= WARN_LIMIT:
+                until = datetime.now() + timedelta(minutes=WARN_MUTE_MINUTES)
+                await db_set_mute(cid, tid, until)
                 await send_confirm(cid, f"🔇 <b>Мут</b> {WARN_MUTE_MINUTES} мин. за {WARN_LIMIT} варнов",
                                    conn, sec=15)
-                warns[tid] = 0
+                await db_reset_warn(cid, tid)
             return
 
         # ---- .unwarn ----
@@ -1240,7 +1329,7 @@ async def business_msg(message: types.Message):
             if not message.reply_to_message or not message.reply_to_message.from_user:
                 await delete_cmd(message); return
             tid = message.reply_to_message.from_user.id
-            warns.pop(tid, None)
+            await db_reset_warn(cid, tid)
             await delete_cmd(message)
             await send_confirm(cid, f"✅ Варны сняты с <code>{tid}</code>", conn, sec=10)
             return
@@ -1476,7 +1565,7 @@ async def business_msg(message: types.Message):
                 await send_confirm(cid, f"✅ Опубликовано {posted}/9 частей в историю", conn, sec=10)
             return
 
-        # ---- Заглушки .text/.photo/.gs ----
+        # ---- Заглушки ----
         if cmd == ".text":
             await delete_cmd(message); await send_confirm(cid, "📝 Text ON", conn, sec=5); return
         if cmd == ".untext":
@@ -1580,7 +1669,7 @@ async def cb_ttt(call: types.CallbackQuery):
     await call.answer()
 
 # ============================================================
-# CALLBACK: подписка / меню / оплата
+# CALLBACK: меню / оплата
 # ============================================================
 @dp.callback_query(F.data == "check_sub")
 async def cb_check_sub(call: types.CallbackQuery):
@@ -1785,20 +1874,6 @@ async def pm_commands(message: types.Message):
     if not parts: return
     if parts[0] == ".help":
         await message.answer("📖 <code>.mute @user N</code>, <code>.unmute @user</code>")
-    if parts[0] == ".mute" and len(parts) >= 2:
-        t = parts[1].lstrip("@")
-        try: m = int(parts[2])
-        except (ValueError, IndexError): m = 10
-        conn, cid = await find_connection_by_target(t)
-        if not conn: await message.answer(f"❌ Не найден {t}"); return
-        mutes[cid] = datetime.now() + timedelta(minutes=m)
-        await message.answer(f"✅ Мут {t} на {m} мин")
-    if parts[0] == ".unmute" and len(parts) >= 2:
-        t = parts[1].lstrip("@")
-        conn, cid = await find_connection_by_target(t)
-        if not conn: await message.answer(f"❌ Не найден {t}"); return
-        mutes.pop(cid, None); warns.pop(cid, None)
-        await message.answer(f"✅ Размучен {t}")
 
 # ============================================================
 # ФОРВАРД ЛС ВЛАДЕЛЬЦУ
