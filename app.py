@@ -126,7 +126,6 @@ async def init_db():
             excluded_chats TEXT DEFAULT '[]',
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         )""")
-        # ---- ВАРНЫ / МУТЫ В БД ----
         await db.execute("""CREATE TABLE IF NOT EXISTS warns (
             chat_id INTEGER,
             user_id INTEGER,
@@ -251,7 +250,7 @@ async def db_clear_mute(chat_id: int, user_id: int):
         await db.commit()
 
 # ============================================================
-# НАСТРОЙКИ (user_settings)
+# НАСТРОЙКИ
 # ============================================================
 async def db_get_settings(uid: int) -> dict:
     if uid in user_settings_cache:
@@ -280,7 +279,7 @@ async def db_get_settings(uid: int) -> dict:
     return data
 
 # ============================================================
-# FLASK: health + WebApp + API
+# FLASK
 # ============================================================
 flask_app = Flask(__name__, static_folder=None)
 
@@ -407,7 +406,7 @@ def run_flask():
     flask_app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)), use_reloader=False)
 
 # ============================================================
-# ЛОГИ + БОТ + ДИСПЕТЧЕР
+# ЛОГИ + БОТ
 # ============================================================
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 bot = Bot(token=BOT_TOKEN)
@@ -521,13 +520,6 @@ async def broadcast_to_all_users(text: str):
     except Exception as e:
         logging.error(f"broadcast_to_all_users: {e}")
     return sent, failed
-
-async def delete_warn_msg(cid):
-    old = warn_messages.get(cid); conn = last_conn_by_chat.get(cid)
-    if old and conn:
-        try: await delete_business_msg(conn, [old])
-        except Exception as e: logging.error(f"del warn: {e}")
-    warn_messages.pop(cid, None)
 
 def distort(text, level=3):
     if not text: return text
@@ -723,7 +715,6 @@ async def fetch_prices():
     lines.append("━━━━━━━━━━━━━━━━━━━━")
     return "\n".join(lines)
 
-# ---- игры ----
 RPS_WINS = {"камень": "ножницы", "ножницы": "бумага", "бумага": "камень"}
 def rps_res(p, b):
     if p == b: return "🤝 Ничья!"
@@ -777,7 +768,7 @@ def pluralize(n):
     return f"{s} {w}"
 
 # ============================================================
-# ИМЯ И ОПИСАНИЕ БОТА
+# ИМЯ И ОПИСАНИЕ
 # ============================================================
 async def update_bot_name():
     try:
@@ -824,7 +815,7 @@ async def background_name_updater():
         await update_bot_description()
 
 # ============================================================
-# ПОДПИСКА НА КАНАЛ
+# ПОДПИСКА
 # ============================================================
 async def check_subscription(uid):
     try:
@@ -841,7 +832,7 @@ def subscribe_kb():
     ])
 
 # ============================================================
-# BUSINESS CONNECTION
+# BUSINESS
 # ============================================================
 async def get_owner_id(conn):
     if not conn: return None
@@ -866,7 +857,7 @@ async def find_connection_by_target(t):
     return None, None
 
 # ============================================================
-# КЛАВИАТУРЫ И ТЕКСТЫ МЕНЮ
+# КЛАВИАТУРЫ И ТЕКСТЫ
 # ============================================================
 def main_menu():
     return types.InlineKeyboardMarkup(inline_keyboard=[
@@ -893,18 +884,48 @@ def plans_kb(uid=None):
 TEXT_MAIN_MENU = ("🏠 <b>Главное меню</b>\n━━━━━━━━━━━━━━━━━━━━\n"
                   "🛡 <b>AntiSpam Defender</b> — защита от спама в бизнес-чатах Telegram.\n\n"
                   "Подключите бота к своему аккаунту и управляйте командами прямо в переписке.")
-TEXT_CMD_LIST = ("📖 <b>Команды бота</b>\n━━━━━━━━━━━━━━━━━━━━\n"
-                 "<b>Модерация:</b>\n.mute N, .unmute, .warn N, .unwarn\n.spam N текст — рассылка\n\n"
-                 "<b>Утилиты:</b>\n.info, .calc/.c, .qr, .dl N текст, .txt текст\n"
-                 ".weather Город, .translate текст, .price\n\n"
-                 "<b>Стили:</b>\n.type on стиль, .type off\n.text/.untext, .photo/.unphoto, .gs/.ungs\n\n"
-                 "<b>Развлечения:</b>\n.rps, .ttt, .wordle слово\n.roll 2d6, .coin, .8ball вопрос\n\n"
-                 "<b>Клонирование:</b>\n.clone on/off, .nonmute on/off, .ghost on/off, .story")
-TEXT_HOWTO = ("📚 <b>Как подключить</b>\n━━━━━━━━━━━━━━━━━━━━\n"
-              "1. Откройте @AntiSpam_Defender_bot\n"
-              "2. Настройки → Telegram Business → Чат-боты\n"
-              "3. Подключите @AntiSpam_Defender_bot\n"
-              "4. Готово! Команды работают прямо в переписке.")
+
+TEXT_CMD_LIST = (
+    "📖 <b>Команды бота</b>\n"
+    "━━━━━━━━━━━━━━━━━━━━\n\n"
+    "<b>🛡 Модерация</b>\n"
+    "<code>.mute N</code> — замутить на N минут\n"
+    "<code>.unmute</code> — снять мут\n"
+    "<code>.warn N</code> — выдать N варнов\n"
+    "<code>.unwarn</code> — снять варны\n"
+    "<code>.spam N текст</code> — рассылка N раз\n\n"
+    "<b>🛠 Утилиты</b>\n"
+    "<code>.info</code> — данные собеседника\n"
+    "<code>.calc выр.</code> / <code>.c выр.</code> — калькулятор\n"
+    "<code>.qr текст</code> — QR-код\n"
+    "<code>.dl N текст</code> — сообщение с автоудалением\n"
+    "<code>.txt текст</code> — анимация печати\n"
+    "<code>.weather Город</code> — погода\n"
+    "<code>.translate текст</code> — перевод\n"
+    "<code>.price</code> — курсы валют\n\n"
+    "<b>🎨 Стили</b>\n"
+    "<code>.type on стиль</code> — вкл автостиль\n"
+    "<code>.type off</code> — выкл автостиль\n"
+    "<code>.text</code> / <code>.untext</code> — text-режим\n"
+    "<code>.photo</code> / <code>.unphoto</code> — photo-режим\n"
+    "<code>.gs</code> / <code>.ungs</code> — GS-режим\n\n"
+    "<b>🎮 Развлечения</b>\n"
+    "<code>.rps</code> — камень-ножницы-бумага\n"
+    "<code>.ttt</code> — крестики-нолики\n"
+    "<code>.wordle слово</code> — Wordle\n"
+    "<code>.roll 2d6</code> — бросок кубиков\n"
+    "<code>.coin</code> — орёл/решка\n"
+    "<code>.8ball вопрос</code> — магический шар\n\n"
+    "<b>👥 Клонирование</b>\n"
+    "<code>.clone on/off</code> — клонирование\n"
+    "<code>.nonmute on/off</code> — игнор мута\n"
+    "<code>.ghost on/off</code> — копия в ЛС\n"
+    "<code>.story</code> — фото (реплай) в историю\n\n"
+    "<b>⚙️ Владелец</b>\n"
+    "<code>.maintenance on/off</code> — тех.работы\n"
+    "<code>.st текст</code> — жирный текст"
+)
+
 TEXT_REF = ("👥 <b>Пригласить друга</b>\n━━━━━━━━━━━━━━━━━━━━\n"
             "За каждого друга — <b>+3 дня</b> подписки!\n\nВаша ссылка:\n")
 
@@ -941,7 +962,7 @@ async def start_cmd(message: types.Message):
     await send_photo_banner(message.chat.id, TEXT_MAIN_MENU, kb=main_menu())
 
 # ============================================================
-# /stats (owner)
+# /stats
 # ============================================================
 @dp.message(F.text == "/stats", F.from_user.id == OWNER_ID)
 async def stats_cmd(message: types.Message):
@@ -979,7 +1000,7 @@ async def on_business_connection(conn: types.BusinessConnection):
         logging.error(f"on_business_connection: {e}")
 
 # ============================================================
-# УДАЛЕНИЕ СООБЩЕНИЙ
+# УДАЛЕНИЕ / ИЗМЕНЕНИЕ
 # ============================================================
 @dp.deleted_business_messages()
 async def on_deleted_messages(event: types.BusinessMessagesDeleted):
@@ -987,10 +1008,8 @@ async def on_deleted_messages(event: types.BusinessMessagesDeleted):
         cid = event.chat.id; conn = event.business_connection_id
         owner_id_of_conn = await get_owner_id(conn)
         if not owner_id_of_conn: return
-
         settings = await db_get_settings(owner_id_of_conn)
         cached_all = message_cache.get(cid, {})
-
         for mid in event.message_ids:
             if mid in deleted_by_bot:
                 deleted_by_bot.discard(mid); continue
@@ -1009,15 +1028,11 @@ async def on_deleted_messages(event: types.BusinessMessagesDeleted):
                     )
                 except Exception as e:
                     logging.error(f"notify_delete: {e}")
-
         if nonmute_active.get(cid, False):
             return
     except Exception as e:
         logging.error(f"on_deleted_messages: {e}")
 
-# ============================================================
-# ИЗМЕНЕНИЕ СООБЩЕНИЙ
-# ============================================================
 @dp.edited_business_message()
 async def on_edited_business_msg(message: types.Message):
     try:
@@ -1030,10 +1045,8 @@ async def on_edited_business_msg(message: types.Message):
         if cid in message_cache and message.message_id in message_cache[cid]:
             old = message_cache[cid][message.message_id]
         cache_message(message)
-
         settings = await db_get_settings(owner_id_of_conn)
         if not settings["notify_edit"]: return
-
         from_name = message.from_user.full_name if message.from_user else "—"
         from_id = message.from_user.id if message.from_user else "—"
         old_text = (old.get("text") if old else None) or "—"
@@ -1052,7 +1065,7 @@ async def on_edited_business_msg(message: types.Message):
         logging.error(f"on_edited_business_msg: {e}")
 
 # ============================================================
-# ОСНОВНОЙ ОБРАБОТЧИК BUSINESS MESSAGE
+# BUSINESS MESSAGE
 # ============================================================
 @dp.business_message()
 async def business_msg(message: types.Message):
@@ -1139,7 +1152,7 @@ async def business_msg(message: types.Message):
             cmd = "." + cmd[len(prefix):]
             parts[0] = cmd
 
-        # ---- .maintenance (только для @ysorn) ----
+        # ---- .maintenance ----
         if cmd == ".maintenance":
             msg_user = message.from_user
             is_owner_by_username = (
@@ -1158,23 +1171,27 @@ async def business_msg(message: types.Message):
                 async with aiosqlite.connect(DB_PATH) as db:
                     await db.execute("INSERT OR REPLACE INTO meta (key,value) VALUES ('maintenance','1')")
                     await db.commit()
-                await send_confirm(cid, "🔧 <b>Технические работы ВКЛЮЧЕНЫ</b>\nРассылаю уведомления...", conn, sec=10)
-                asyncio.create_task(broadcast_to_all_users(
+                await send_confirm(cid, "🔧 <b>Технические работы ВКЛЮЧЕНЫ</b>\nРассылаю уведомления...", conn, sec=5)
+                sent, failed = await broadcast_to_all_users(
                     "🔧 <b>Технические работы</b>\n\n"
                     "Бот временно недоступен — ведутся технические работы.\n"
                     "Некоторые команды могут не отвечать.\n\n"
                     "Спасибо за понимание! 🛡"
-                ))
+                )
+                await send_confirm(cid, f"📢 Отправлено: <b>{sent}</b> | ошибок: <b>{failed}</b>",
+                                   conn, sec=15)
             elif arg == "off":
                 async with aiosqlite.connect(DB_PATH) as db:
                     await db.execute("INSERT OR REPLACE INTO meta (key,value) VALUES ('maintenance','0')")
                     await db.commit()
-                await send_confirm(cid, "✅ <b>Технические работы ВЫКЛЮЧЕНЫ</b>\nРассылаю уведомления...", conn, sec=10)
-                asyncio.create_task(broadcast_to_all_users(
+                await send_confirm(cid, "✅ <b>Технические работы ВЫКЛЮЧЕНЫ</b>\nРассылаю уведомления...", conn, sec=5)
+                sent, failed = await broadcast_to_all_users(
                     "✅ <b>Технические работы завершены</b>\n\n"
                     "Бот снова работает в обычном режиме.\n"
                     "Все команды доступны. 🛡"
-                ))
+                )
+                await send_confirm(cid, f"📢 Отправлено: <b>{sent}</b> | ошибок: <b>{failed}</b>",
+                                   conn, sec=15)
             else:
                 await send_confirm(cid, "Использование: <code>.maintenance on</code> или <code>.maintenance off</code>", conn, sec=10)
             return
@@ -1603,7 +1620,7 @@ async def business_msg(message: types.Message):
         logging.error(f"business_msg: {e}")
 
 # ============================================================
-# ОДНОРАЗОВОЕ ФОТО
+# ОДНОРАЗОВОЕ
 # ============================================================
 @dp.business_message(F.reply_to_message)
 async def onetime_media(message: types.Message):
@@ -1669,7 +1686,7 @@ async def cb_ttt(call: types.CallbackQuery):
     await call.answer()
 
 # ============================================================
-# CALLBACK: меню / оплата
+# CALLBACK: меню
 # ============================================================
 @dp.callback_query(F.data == "check_sub")
 async def cb_check_sub(call: types.CallbackQuery):
@@ -1824,7 +1841,7 @@ async def cb_reject(call: types.CallbackQuery):
     await call.answer("❌")
 
 # ============================================================
-# ПРЕДОПЛАТА ЗВЁЗДАМИ
+# ОПЛАТА ЗВЁЗДАМИ
 # ============================================================
 @dp.pre_checkout_query()
 async def pre_checkout_handler(pcq: PreCheckoutQuery):
@@ -1866,7 +1883,7 @@ async def on_successful_payment(message: types.Message):
         logging.error(f"successful_payment: {e}")
 
 # ============================================================
-# ЛС КОМАНДЫ
+# ЛС
 # ============================================================
 @dp.message(F.chat.type == "private", F.text.startswith("."), F.from_user.id == OWNER_ID)
 async def pm_commands(message: types.Message):
@@ -1875,9 +1892,6 @@ async def pm_commands(message: types.Message):
     if parts[0] == ".help":
         await message.answer("📖 <code>.mute @user N</code>, <code>.unmute @user</code>")
 
-# ============================================================
-# ФОРВАРД ЛС ВЛАДЕЛЬЦУ
-# ============================================================
 @dp.message(F.chat.type == "private", ~F.text.startswith("."))
 async def forward_to_owner(message: types.Message):
     if message.from_user.id == OWNER_ID: return
