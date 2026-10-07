@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>AntiSpam Defender — Настройки</title>
+<title>AntiSpam Defender</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
@@ -14,9 +14,9 @@
     --border: #232323;
     --text: #ffffff;
     --text2: #8a8a8a;
-    --accent: #ffffff;
     --danger: #ff4d4d;
     --green: #4ade80;
+    --yellow: #fbbf24;
   }
   body {
     background: var(--bg);
@@ -24,11 +24,9 @@
     font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
     font-size: 15px;
     min-height: 100vh;
-    padding-bottom: 100px;
+    padding-bottom: 110px;
   }
-  .header {
-    padding: 20px 20px 10px;
-  }
+  .header { padding: 20px 20px 10px; }
   .header .subtitle {
     color: var(--text2);
     font-size: 11px;
@@ -37,19 +35,18 @@
     margin-bottom: 6px;
   }
   .header h1 {
-    font-size: 32px;
+    font-size: 30px;
     font-weight: 300;
     letter-spacing: 1px;
   }
-  .section {
-    padding: 20px;
-  }
+  .section { padding: 16px 20px; }
   .section-title {
     color: var(--text2);
-    font-size: 12px;
+    font-size: 11px;
     letter-spacing: 3px;
     text-transform: uppercase;
     margin-bottom: 12px;
+    margin-top: 8px;
   }
   .section-desc {
     color: var(--text2);
@@ -57,56 +54,65 @@
     line-height: 1.4;
     margin-bottom: 14px;
   }
+  /* status banner */
+  .status {
+    margin: 16px 20px 0;
+    padding: 18px;
+    border-radius: 16px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    border: 1px solid var(--border);
+    background: var(--card);
+  }
+  .status.ok { border-color: rgba(74, 222, 128, .35); background: rgba(74, 222, 128, .08); }
+  .status.warn { border-color: rgba(251, 191, 36, .35); background: rgba(251, 191, 36, .08); }
+  .status.maint { border-color: rgba(255, 77, 77, .45); background: rgba(255, 77, 77, .08); }
+  .status .dot {
+    width: 12px; height: 12px; border-radius: 50%;
+    flex-shrink: 0;
+    box-shadow: 0 0 12px currentColor;
+  }
+  .status.ok .dot { background: var(--green); color: var(--green); }
+  .status.warn .dot { background: var(--yellow); color: var(--yellow); }
+  .status.maint .dot { background: var(--danger); color: var(--danger); animation: pulse 1.5s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
+  .status .txt { flex: 1; }
+  .status .txt b { font-size: 16px; display: block; margin-bottom: 3px; }
+  .status .txt small { color: var(--text2); font-size: 12px; }
+
+  /* card */
   .card {
     background: var(--card);
     border: 1px solid var(--border);
     border-radius: 16px;
-    padding: 18px;
+    padding: 16px 18px;
     margin-bottom: 10px;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 14px;
   }
-  .card .label {
-    font-size: 15px;
-    line-height: 1.3;
-    flex: 1;
-  }
+  .card .label { font-size: 15px; line-height: 1.3; flex: 1; }
+
   /* switch */
-  .switch {
-    position: relative;
-    width: 56px;
-    height: 32px;
-    flex-shrink: 0;
-  }
+  .switch { position: relative; width: 54px; height: 32px; flex-shrink: 0; }
   .switch input { display: none; }
   .slider {
-    position: absolute;
-    cursor: pointer;
-    inset: 0;
-    background: #333;
-    border-radius: 32px;
-    transition: .25s;
+    position: absolute; cursor: pointer; inset: 0;
+    background: #333; border-radius: 32px; transition: .25s;
   }
   .slider:before {
-    content: "";
-    position: absolute;
-    height: 24px; width: 24px;
-    left: 4px; top: 4px;
-    background: #fff;
-    border-radius: 50%;
-    transition: .25s;
+    content: ""; position: absolute;
+    height: 24px; width: 24px; left: 4px; top: 4px;
+    background: #fff; border-radius: 50%; transition: .25s;
   }
   input:checked + .slider { background: #fff; }
-  input:checked + .slider:before { transform: translateX(24px); background: #0a0a0a; }
-  /* input */
-  .input-row {
-    display: flex;
-    gap: 10px;
-    margin-bottom: 10px;
-  }
-  input[type="text"], input[type="number"] {
+  input:checked + .slider:before { transform: translateX(22px); background: #0a0a0a; }
+
+  /* input row */
+  .input-row { display: flex; gap: 10px; margin-bottom: 10px; }
+  input[type="text"] {
     flex: 1;
     background: var(--card);
     border: 1px solid var(--border);
@@ -120,115 +126,122 @@
   input[type="text"]::placeholder { color: #555; }
   input[type="text"]:focus { border-color: #444; }
   .btn {
-    background: #fff;
-    color: #0a0a0a;
-    border: none;
-    border-radius: 14px;
-    padding: 16px 22px;
-    font-size: 15px;
-    font-weight: 600;
-    cursor: pointer;
-    white-space: nowrap;
+    background: #fff; color: #0a0a0a;
+    border: none; border-radius: 14px;
+    padding: 16px 22px; font-size: 15px; font-weight: 600;
+    cursor: pointer; white-space: nowrap;
   }
   .btn:active { opacity: .7; }
-  .empty {
-    color: var(--text2);
-    font-size: 14px;
-    padding: 4px 0;
-  }
+
+  .empty { color: var(--text2); font-size: 14px; padding: 4px 0; }
   .excl-item {
     background: var(--card);
     border: 1px solid var(--border);
     border-radius: 14px;
-    padding: 14px 18px;
-    margin-bottom: 8px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
+    padding: 14px 18px; margin-bottom: 8px;
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
   }
-  .excl-item span { font-size: 15px; }
+  .excl-item span { font-size: 15px; word-break: break-all; }
   .del {
-    background: transparent;
-    border: none;
-    color: var(--danger);
-    font-size: 20px;
-    cursor: pointer;
-    padding: 4px 8px;
-    line-height: 1;
+    background: transparent; border: none; color: var(--danger);
+    font-size: 22px; cursor: pointer; padding: 2px 10px; line-height: 1;
   }
+
+  /* command list */
+  .cmd-group { margin-bottom: 22px; }
+  .cmd-group .gt {
+    color: var(--text2); font-size: 11px;
+    letter-spacing: 2.5px; text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+  .cmd {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 14px 16px;
+    margin-bottom: 8px;
+  }
+  .cmd .name {
+    font-family: 'SF Mono', Menlo, monospace;
+    font-size: 14px;
+    color: #fff;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .cmd .desc {
+    color: var(--text2);
+    font-size: 13px;
+    line-height: 1.35;
+  }
+
   /* toast */
   .toast {
-    position: fixed;
-    bottom: 100px;
-    left: 50%;
+    position: fixed; bottom: 110px; left: 50%;
     transform: translateX(-50%) translateY(30px);
-    background: #fff;
-    color: #0a0a0a;
-    padding: 12px 22px;
-    border-radius: 12px;
-    font-size: 14px;
-    font-weight: 600;
-    opacity: 0;
-    transition: .3s;
-    pointer-events: none;
-    z-index: 1000;
+    background: #fff; color: #0a0a0a;
+    padding: 12px 22px; border-radius: 12px;
+    font-size: 14px; font-weight: 600;
+    opacity: 0; transition: .3s; pointer-events: none; z-index: 1000;
   }
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   .toast.error { background: var(--danger); color: #fff; }
+
   /* bottom nav */
   .nav {
-    position: fixed;
-    bottom: 14px;
-    left: 14px;
-    right: 14px;
+    position: fixed; bottom: 14px; left: 14px; right: 14px;
     background: #101010;
     border: 1px solid var(--border);
     border-radius: 26px;
     padding: 8px;
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 4px;
-    z-index: 999;
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 4px; z-index: 999;
   }
   .nav-item {
-    padding: 10px 4px;
-    text-align: center;
-    color: var(--text2);
-    font-size: 10px;
-    border-radius: 18px;
-    cursor: pointer;
-    transition: .2s;
-    user-select: none;
+    padding: 10px 4px; text-align: center;
+    color: var(--text2); font-size: 10px;
+    border-radius: 18px; cursor: pointer;
+    transition: .2s; user-select: none;
   }
   .nav-item .ic { font-size: 20px; display: block; margin-bottom: 3px; }
-  .nav-item.active {
-    background: #fff;
-    color: #0a0a0a;
-    font-weight: 600;
-  }
+  .nav-item.active { background: #fff; color: #0a0a0a; font-weight: 600; }
+
   .page { display: none; }
   .page.active { display: block; }
-  .stub {
-    padding: 60px 20px;
-    text-align: center;
-    color: var(--text2);
-  }
-  .stub .big { font-size: 48px; margin-bottom: 12px; }
 </style>
 </head>
 <body>
 
 <!-- ============ ГЛАВНАЯ ============ -->
-<div class="page" id="page-home">
+<div class="page active" id="page-home">
   <div class="header">
     <div class="subtitle">AntiSpam Defender</div>
     <h1>Главная</h1>
   </div>
+
+  <div class="status" id="status-banner">
+    <div class="dot"></div>
+    <div class="txt">
+      <b id="status-title">Загрузка...</b>
+      <small id="status-sub">Проверяем состояние...</small>
+    </div>
+  </div>
+
   <div class="section">
-    <div class="section-desc">Добро пожаловать! 🛡 AntiSpam Defender защищает ваш бизнес-чат от спама и мусора.</div>
-    <div class="card"><div class="label">⚙️ Откройте «Настройки», чтобы управлять уведомлениями и префиксом команд.</div></div>
-    <div class="card"><div class="label">📖 Список всех команд — в меню бота через кнопку «Команды».</div></div>
+    <div class="section-title">О боте</div>
+    <div class="card">
+      <div class="label">🛡 <b>AntiSpam Defender</b> — защита бизнес-чатов Telegram от спама, мусора и нежелательных сообщений.</div>
+    </div>
+    <div class="card">
+      <div class="label">📖 Список всех команд с описанием — во вкладке «Команды»</div>
+    </div>
+    <div class="card">
+      <div class="label">⚙️ Настройки уведомлений и префикса — во вкладке «Настройки»</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Как подключить</div>
+    <div class="section-desc">1. Открой @AntiSpam_Defender_bot<br>2. Настройки → Telegram Business → Чат-боты<br>3. Подключи @AntiSpam_Defender_bot<br>4. Готово — команды работают прямо в переписке.</div>
   </div>
 </div>
 
@@ -238,35 +251,67 @@
     <div class="subtitle">AntiSpam Defender</div>
     <h1>Команды</h1>
   </div>
-  <div class="section">
-    <div class="section-title">Модерация</div>
-    <div class="card"><div class="label"><b>.mute N</b> — замутить на N минут</div></div>
-    <div class="card"><div class="label"><b>.unmute</b> — снять мут</div></div>
-    <div class="card"><div class="label"><b>.warn N</b> — выдать N варнов</div></div>
-    <div class="card"><div class="label"><b>.spam N текст</b> — рассылка</div></div>
-    <div class="section-title" style="margin-top:20px">Утилиты</div>
-    <div class="card"><div class="label"><b>.info</b> — данные собеседника</div></div>
-    <div class="card"><div class="label"><b>.calc / .c</b> — калькулятор</div></div>
-    <div class="card"><div class="label"><b>.qr текст</b> — QR-код</div></div>
-    <div class="card"><div class="label"><b>.weather Город</b> — погода</div></div>
-    <div class="card"><div class="label"><b>.price</b> — курсы валют</div></div>
-  </div>
-</div>
 
-<!-- ============ АВТО ============ -->
-<div class="page" id="page-auto">
-  <div class="header">
-    <div class="subtitle">AntiSpam Defender</div>
-    <h1>Авто</h1>
-  </div>
-  <div class="stub">
-    <div class="big">🚧</div>
-    <div>Автоматизация<br>скоро появится</div>
+  <div class="section">
+    <div class="cmd-group">
+      <div class="gt">🛡 Модерация</div>
+      <div class="cmd"><div class="name">.mute N</div><div class="desc">Замутить собеседника на N минут (по умолчанию 10). Все его сообщения удаляются.</div></div>
+      <div class="cmd"><div class="name">.unmute</div><div class="desc">Снять мут с собеседника (реплай на сообщение).</div></div>
+      <div class="cmd"><div class="name">.warn N</div><div class="desc">Выдать N варнов (по умолчанию 1). При достижении лимита — автомут.</div></div>
+      <div class="cmd"><div class="name">.unwarn</div><div class="desc">Снять все варны с собеседника.</div></div>
+      <div class="cmd"><div class="name">.spam N текст</div><div class="desc">Отправить текст N раз (макс 30). Задержка 0.15 сек.</div></div>
+      <div class="cmd"><div class="name">.nonmute on/off</div><div class="desc">Игнорировать удаление сообщений (не удалять сообщения замученных).</div></div>
+    </div>
+
+    <div class="cmd-group">
+      <div class="gt">🛠 Утилиты</div>
+      <div class="cmd"><div class="name">.info</div><div class="desc">Показать данные собеседника: ID, username, premium (реплай).</div></div>
+      <div class="cmd"><div class="name">.calc / .c выражение</div><div class="desc">Калькулятор. Пример: <code>.c 2+2*10</code></div></div>
+      <div class="cmd"><div class="name">.qr текст</div><div class="desc">Сгенерировать QR-код из текста.</div></div>
+      <div class="cmd"><div class="name">.weather Город</div><div class="desc">Погода в городе (open-meteo).</div></div>
+      <div class="cmd"><div class="name">.translate текст</div><div class="desc">Перевод текста на русский (Google).</div></div>
+      <div class="cmd"><div class="name">.price</div><div class="desc">Курсы валют ЦБ РФ, USDT, TON.</div></div>
+      <div class="cmd"><div class="name">.dl N текст</div><div class="desc">Отправить сообщение и удалить через N секунд.</div></div>
+      <div class="cmd"><div class="name">.txt текст</div><div class="desc">Анимация печати текста (по буквам).</div></div>
+    </div>
+
+    <div class="cmd-group">
+      <div class="gt">🎨 Стили</div>
+      <div class="cmd"><div class="name">.type on стиль</div><div class="desc">Включить авто-стиль для твоих сообщений. Стили: bold, italic, underline, strike, code, quote, spoiler.</div></div>
+      <div class="cmd"><div class="name">.type off</div><div class="desc">Отключить авто-стиль.</div></div>
+      <div class="cmd"><div class="name">.text / .untext</div><div class="desc">Режим только-текст (заглушка).</div></div>
+      <div class="cmd"><div class="name">.photo / .unphoto</div><div class="desc">Режим только-фото (заглушка).</div></div>
+      <div class="cmd"><div class="name">.gs / .ungs</div><div class="desc">Режим GS (заглушка).</div></div>
+    </div>
+
+    <div class="cmd-group">
+      <div class="gt">🎮 Развлечения</div>
+      <div class="cmd"><div class="name">.rps</div><div class="desc">Камень-ножницы-бумага.</div></div>
+      <div class="cmd"><div class="name">.ttt</div><div class="desc">Крестики-нолики с ботом.</div></div>
+      <div class="cmd"><div class="name">.wordle слово</div><div class="desc">Начать игру Wordle с загаданным словом.</div></div>
+      <div class="cmd"><div class="name">.roll NdM</div><div class="desc">Бросок кубиков. Пример: <code>.roll 2d6</code></div></div>
+      <div class="cmd"><div class="name">.coin</div><div class="desc">Орёл или решка.</div></div>
+      <div class="cmd"><div class="name">.8ball вопрос</div><div class="desc">Магический шар — ответ на вопрос.</div></div>
+    </div>
+
+    <div class="cmd-group">
+      <div class="gt">👥 Клонирование / Ghost</div>
+      <div class="cmd"><div class="name">.clone on/off</div><div class="desc">Клонирование сообщений.</div></div>
+      <div class="cmd"><div class="name">.ghost on/off</div><div class="desc">Копировать входящие сообщения в ЛС владельцу.</div></div>
+      <div class="cmd"><div class="name">.echo on/off</div><div class="desc">Эхо-режим: пересылать сообщения обратно.</div></div>
+      <div class="cmd"><div class="name">.story</div><div class="desc">Нарезать фото (реплай) на 9 частей и запостить в историю 3×3.</div></div>
+    </div>
+
+    <div class="cmd-group">
+      <div class="gt">⚙️ Админ (владелец)</div>
+      <div class="cmd"><div class="name">.maintenance on/off</div><div class="desc">Включить/выключить режим тех. работ. Отображается в этом меню.</div></div>
+      <div class="cmd"><div class="name">.st текст</div><div class="desc">Отправить жирный текст.</div></div>
+    </div>
   </div>
 </div>
 
 <!-- ============ НАСТРОЙКИ ============ -->
-<div class="page active" id="page-settings">
+<div class="page" id="page-settings">
   <div class="header">
     <div class="subtitle">Настройки</div>
     <h1>Уведомления</h1>
@@ -275,23 +320,17 @@
   <div class="section">
     <div class="card">
       <div class="label">Уведомления об изменении сообщения</div>
-      <label class="switch">
-        <input type="checkbox" id="notify_edit">
-        <span class="slider"></span>
-      </label>
+      <label class="switch"><input type="checkbox" id="notify_edit"><span class="slider"></span></label>
     </div>
     <div class="card">
       <div class="label">Уведомления об удалении сообщения</div>
-      <label class="switch">
-        <input type="checkbox" id="notify_delete">
-        <span class="slider"></span>
-      </label>
+      <label class="switch"><input type="checkbox" id="notify_delete"><span class="slider"></span></label>
     </div>
   </div>
 
   <div class="section">
     <div class="section-title">Префикс команд</div>
-    <div class="section-desc">Несколько знаков через пробел: <code>.</code> / <code>!</code> / <code>&</code> — пробел после знака всегда работает (<code>.mute</code>)</div>
+    <div class="section-desc">Знак или символ перед командой. По умолчанию <code>.</code></div>
     <div class="input-row">
       <input type="text" id="cmd_prefix" maxlength="3" placeholder=".">
       <button class="btn" onclick="savePrefix()">Сохранить</button>
@@ -300,9 +339,9 @@
 
   <div class="section">
     <div class="section-title">Исключить чаты</div>
-    <div class="section-desc">Бот не будет работать в переписке с этим пользователем.</div>
+    <div class="section-desc">Бот не будет обрабатывать сообщения от этих пользователей (user_id).</div>
     <div class="input-row">
-      <input type="text" id="excl_input" placeholder="@username">
+      <input type="text" id="excl_input" placeholder="user_id">
       <button class="btn" onclick="addExcluded()">Добавить</button>
     </div>
     <div id="excl_list"><div class="empty">Пока никого нет</div></div>
@@ -311,10 +350,9 @@
 
 <!-- ============ NAV ============ -->
 <div class="nav">
-  <div class="nav-item" data-page="home"><span class="ic">🏠</span>Главная</div>
+  <div class="nav-item active" data-page="home"><span class="ic">🏠</span>Главная</div>
   <div class="nav-item" data-page="cmds"><span class="ic">📋</span>Команды</div>
-  <div class="nav-item" data-page="auto"><span class="ic">⚡</span>Авто</div>
-  <div class="nav-item active" data-page="settings"><span class="ic">⚙️</span>Настройки</div>
+  <div class="nav-item" data-page="settings"><span class="ic">⚙️</span>Настройки</div>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -338,20 +376,45 @@ function toast(msg, isError) {
   window._tt = setTimeout(() => { t.className = 'toast'; }, 2200);
 }
 
-async function apiGet() {
-  const r = await fetch('/api/settings', {
-    headers: { 'X-Init-Data': tg.initData }
-  });
+async function apiGet(url) {
+  const r = await fetch(url, { headers: { 'X-Init-Data': tg.initData } });
   return r.json();
 }
-
-async function apiPost(payload) {
-  const r = await fetch('/api/settings', {
+async function apiPost(url, payload) {
+  const r = await fetch(url, {
     method: 'POST',
     headers: { 'X-Init-Data': tg.initData, 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   });
   return r.json();
+}
+
+async function loadStatus() {
+  try {
+    const d = await apiGet('/api/status');
+    const banner = document.getElementById('status-banner');
+    const title = document.getElementById('status-title');
+    const sub = document.getElementById('status-sub');
+    if (!d.ok) { throw new Error('bad response'); }
+    const s = d.status;
+    if (s.maintenance) {
+      banner.className = 'status maint';
+      title.textContent = '🔧 Технические работы';
+      sub.textContent = 'Ведутся работы. Некоторые команды могут не отвечать.';
+    } else if (s.health === 'ok') {
+      banner.className = 'status ok';
+      title.textContent = '✅ Бот работает';
+      sub.textContent = s.uptime_text || 'Все системы в норме';
+    } else {
+      banner.className = 'status warn';
+      title.textContent = '⚠️ Нестабильно';
+      sub.textContent = 'Возможны задержки в ответах.';
+    }
+  } catch (e) {
+    document.getElementById('status-banner').className = 'status warn';
+    document.getElementById('status-title').textContent = '⚠️ Нет связи';
+    document.getElementById('status-sub').textContent = 'Не удалось получить статус.';
+  }
 }
 
 function renderExcluded() {
@@ -364,86 +427,67 @@ function renderExcluded() {
     `<div class="excl-item"><span>${x}</span><button class="del" onclick="removeExcluded('${x}')">×</button></div>`
   ).join('');
 }
-
 function render() {
   document.getElementById('notify_edit').checked = !!state.notify_edit;
   document.getElementById('notify_delete').checked = !!state.notify_delete;
   document.getElementById('cmd_prefix').value = state.cmd_prefix || '.';
   renderExcluded();
 }
-
 async function loadSettings() {
   try {
-    const data = await apiGet();
-    if (data.ok) {
-      state = data.settings;
-      render();
-    } else {
-      toast('Ошибка загрузки', true);
-    }
-  } catch (e) {
-    toast('Сетевая ошибка', true);
-  }
+    const d = await apiGet('/api/settings');
+    if (d.ok) { state = d.settings; render(); }
+    else { toast('Ошибка загрузки', true); }
+  } catch (e) { toast('Сетевая ошибка', true); }
 }
 
 document.getElementById('notify_edit').addEventListener('change', async (e) => {
-  const val = e.target.checked ? 1 : 0;
-  state.notify_edit = val;
-  const r = await apiPost({ notify_edit: val });
+  const v = e.target.checked ? 1 : 0; state.notify_edit = v;
+  const r = await apiPost('/api/settings', { notify_edit: v });
   toast(r.ok ? 'Сохранено' : 'Ошибка', !r.ok);
 });
-
 document.getElementById('notify_delete').addEventListener('change', async (e) => {
-  const val = e.target.checked ? 1 : 0;
-  state.notify_delete = val;
-  const r = await apiPost({ notify_delete: val });
+  const v = e.target.checked ? 1 : 0; state.notify_delete = v;
+  const r = await apiPost('/api/settings', { notify_delete: v });
   toast(r.ok ? 'Сохранено' : 'Ошибка', !r.ok);
 });
-
 async function savePrefix() {
-  let v = document.getElementById('cmd_prefix').value.trim();
-  if (!v) v = '.';
+  let v = document.getElementById('cmd_prefix').value.trim() || '.';
   if (v.length > 3) v = v.slice(0, 3);
   state.cmd_prefix = v;
   document.getElementById('cmd_prefix').value = v;
-  const r = await apiPost({ cmd_prefix: v });
+  const r = await apiPost('/api/settings', { cmd_prefix: v });
   toast(r.ok ? 'Сохранено' : 'Ошибка', !r.ok);
 }
-
 async function addExcluded() {
   const inp = document.getElementById('excl_input');
-  let v = inp.value.trim();
+  const v = inp.value.trim();
   if (!v) return;
   if (state.excluded_chats.includes(v)) { toast('Уже в списке', true); return; }
   state.excluded_chats.push(v);
-  renderExcluded();
-  inp.value = '';
-  const r = await apiPost({ excluded_chats: state.excluded_chats });
+  renderExcluded(); inp.value = '';
+  const r = await apiPost('/api/settings', { excluded_chats: state.excluded_chats });
   toast(r.ok ? 'Добавлено' : 'Ошибка', !r.ok);
 }
-
 async function removeExcluded(v) {
   state.excluded_chats = state.excluded_chats.filter(x => x !== v);
   renderExcluded();
-  const r = await apiPost({ excluded_chats: state.excluded_chats });
+  const r = await apiPost('/api/settings', { excluded_chats: state.excluded_chats });
   toast(r.ok ? 'Удалено' : 'Ошибка', !r.ok);
 }
 
-// навигация
 document.querySelectorAll('.nav-item').forEach(el => {
   el.addEventListener('click', () => {
     document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
     el.classList.add('active');
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
     document.getElementById('page-' + el.dataset.page).classList.add('active');
-    const h1 = document.querySelector('#page-' + el.dataset.page + ' h1');
-    if (h1) {
-      // смена заголовка только для настроек
-    }
   });
 });
 
+loadStatus();
 loadSettings();
+setInterval(loadStatus, 30000); // обновляем статус каждые 30 сек
 </script>
 </body>
 </html>

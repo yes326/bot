@@ -34,6 +34,7 @@ WARN_MUTE_MINUTES = 60
 ENV_MAX_SEEN = int(os.environ.get("MAX_SEEN_COUNT", "0"))
 RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://bot-7ifx.onrender.com").rstrip("/")
 WEBAPP_URL = f"{RENDER_URL}/webapp"
+_start_time = time.time()
 
 ZWSP = "\u200b"; ZWNJ = "\u200c"; ZWJ = "\u200d"
 INVISIBLES = [ZWSP, ZWNJ, ZWJ]
@@ -82,7 +83,7 @@ wordle_games = {}
 processed_updates = {}
 deleted_by_bot = set()
 type_styles = {}
-user_settings_cache = {}   # кэш настроек: uid -> dict
+user_settings_cache = {}
 _monotonic_count = ENV_MAX_SEEN
 _last_bio = ""
 
@@ -197,7 +198,6 @@ async def count_trials():
 # НАСТРОЙКИ (user_settings)
 # ============================================================
 async def db_get_settings(uid: int) -> dict:
-    """Читает настройки из БД, кэширует."""
     if uid in user_settings_cache:
         return user_settings_cache[uid]
     async with aiosqlite.connect(DB_PATH) as db:
@@ -224,7 +224,6 @@ async def db_get_settings(uid: int) -> dict:
     return data
 
 async def db_set_settings(uid: int, **fields):
-    """Обновляет поля настроек."""
     if not fields: return
     cols, vals = [], []
     for k, v in fields.items():
@@ -238,11 +237,10 @@ async def db_set_settings(uid: int, **fields):
         await db.execute("INSERT OR IGNORE INTO user_settings(user_id) VALUES(?)", (uid,))
         await db.execute(sql, vals)
         await db.commit()
-    # сброс кэша
     user_settings_cache.pop(uid, None)
 
 # ============================================================
-# FLASK: health + WebApp
+# FLASK: health + WebApp + API
 # ============================================================
 flask_app = Flask(__name__, static_folder=None)
 
@@ -258,7 +256,6 @@ def webapp_page():
         return f"webapp.html not found: {e}", 500
 
 def _validate_init_data(init_data: str):
-    """HMAC-SHA256 проверка initData Telegram WebApp."""
     try:
         parsed = dict(urllib.parse.parse_qsl(init_data, strict_parsing=True))
     except Exception:
@@ -278,6 +275,31 @@ def _validate_init_data(init_data: str):
     except Exception:
         parsed["user"] = {}
     return parsed
+
+@flask_app.route('/api/status', methods=["GET"])
+def api_status():
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.execute("SELECT value FROM meta WHERE key='maintenance'")
+        row = cur.fetchone()
+        conn.close()
+        maint = bool(row and row[0] == "1")
+    except Exception:
+        maint = False
+
+    uptime = int(time.time() - _start_time)
+    h = uptime // 3600
+    m = (uptime % 3600) // 60
+    uptime_text = f"В сети {h}ч {m}мин" if h else f"В сети {m}мин"
+
+    return jsonify({
+        "ok": True,
+        "status": {
+            "maintenance": maint,
+            "health": "ok",
+            "uptime_text": uptime_text,
+        }
+    })
 
 @flask_app.route('/api/settings', methods=["GET"])
 def api_settings_get():
@@ -335,7 +357,6 @@ def api_settings_post():
             vals.append(uid)
             conn.execute(f"UPDATE user_settings SET {', '.join(cols)}, updated_at=CURRENT_TIMESTAMP WHERE user_id=?", vals)
         conn.commit(); conn.close()
-        # сброс кэша
         user_settings_cache.pop(uid, None)
         return jsonify({"ok": True})
     except Exception as e:
@@ -882,7 +903,6 @@ async def on_business_connection(conn: types.BusinessConnection):
             username_cache[(conn.user.username or "").lower()] = conn.user.id
         last_conn_by_chat[conn.user.id] = conn.id
         logging.info(f"🔗 Business connection: {conn.id} | owner: {conn.user.id}")
-        # Устанавливаем MenuButton с WebApp для owner'а
         try:
             await bot.set_chat_menu_button(
                 chat_id=conn.user.id,
@@ -894,7 +914,7 @@ async def on_business_connection(conn: types.BusinessConnection):
         logging.error(f"on_business_connection: {e}")
 
 # ============================================================
-# УДАЛЕНИЕ СООБЩЕНИЙ СОБЕСЕДНИКА
+# УДАЛЕНИЕ СООБЩЕНИЙ
 # ============================================================
 @dp.deleted_business_messages()
 async def on_deleted_messages(event: types.BusinessMessagesDeleted):
@@ -903,7 +923,6 @@ async def on_deleted_messages(event: types.BusinessMessagesDeleted):
         owner_id_of_conn = await get_owner_id(conn)
         if not owner_id_of_conn: return
 
-        # ---- уведомления об удалении в ЛС владельцу ----
         settings = await db_get_settings(owner_id_of_conn)
         cached_all = message_cache.get(cid, {})
 
@@ -912,7 +931,6 @@ async def on_deleted_messages(event: types.BusinessMessagesDeleted):
                 deleted_by_bot.discard(mid); continue
             data = cached_all.get(mid)
             if not data: continue
-            # Если владелец хочет получать уведомления об удалении
             if settings["notify_delete"]:
                 from_name = data.get("from_name", "—")
                 from_id = data.get("from_id")
@@ -927,24 +945,13 @@ async def on_deleted_messages(event: types.BusinessMessagesDeleted):
                 except Exception as e:
                     logging.error(f"notify_delete: {e}")
 
-        # ---- старая логика для mute-удалений ----
         if nonmute_active.get(cid, False):
             return
-        cached = cached_all
-        if not cached: return
-        for mid in event.message_ids:
-            if mid in deleted_by_bot:
-                deleted_by_bot.discard(mid); continue
-            data = cached.get(mid)
-            if not data: continue
-            txt = (data.get("text") or "")
-            if txt.startswith("."): continue
-            # тут мог быть форвард владельцу — оставим как было
     except Exception as e:
         logging.error(f"on_deleted_messages: {e}")
 
 # ============================================================
-# ИЗМЕНЕНИЕ СООБЩЕНИЙ — уведомление владельцу
+# ИЗМЕНЕНИЕ СООБЩЕНИЙ
 # ============================================================
 @dp.edited_business_message()
 async def on_edited_business_msg(message: types.Message):
@@ -953,7 +960,6 @@ async def on_edited_business_msg(message: types.Message):
         if not conn: return
         owner_id_of_conn = await get_owner_id(conn)
         if not owner_id_of_conn: return
-        # Обновляем кэш и смотрим, что было
         old = None
         cid = message.chat.id
         if cid in message_cache and message.message_id in message_cache[cid]:
@@ -1003,14 +1009,12 @@ async def business_msg(message: types.Message):
         is_incoming = message.from_user and message.from_user.id != owner_id_of_conn
         is_from_owner = message.from_user and message.from_user.id == owner_id_of_conn
 
-        # ---- ИСКЛЮЧЁННЫЕ ЧАТЫ ----
         if is_incoming:
             settings = await db_get_settings(owner_id_of_conn)
             if str(message.from_user.id) in [str(x) for x in settings["excluded_chats"]]:
                 logging.info(f"⏭ Исключённый чат: {message.from_user.id}")
                 return
 
-        # ---- МУТ ----
         if is_incoming:
             muted = mutes.get(message.from_user.id)
             if muted and datetime.now() < muted:
@@ -1021,7 +1025,6 @@ async def business_msg(message: types.Message):
                     logging.error(f"mute delete: {e}")
                 return
 
-        # ---- GHOST (копия входящих в ЛС) ----
         if ghost_chats.get(cid) and is_incoming:
             try:
                 u = message.from_user
@@ -1030,7 +1033,6 @@ async def business_msg(message: types.Message):
             except Exception as e:
                 logging.error(f"ghost: {e}")
 
-        # ---- ECHO ----
         if echo_chats.get(cid) and is_incoming:
             try:
                 await bot.send_message(cid, f"👤 {message.from_user.full_name}: {text}",
@@ -1039,7 +1041,6 @@ async def business_msg(message: types.Message):
                 logging.error(f"echo: {e}")
             return
 
-        # ---- АВТОСТИЛЬ ----
         if is_from_owner and cid in type_styles:
             style = type_styles.get(cid)
             if style and style in TYPE_STYLES:
@@ -1056,9 +1057,8 @@ async def business_msg(message: types.Message):
                     logging.error(f"style send: {e}")
                 return
 
-        # ---- КОМАНДЫ ----
         if not is_from_owner: return
-        # читаем префикс из настроек
+
         settings = await db_get_settings(owner_id_of_conn)
         prefix = settings.get("cmd_prefix") or "."
         if not text.startswith(prefix): return
@@ -1068,13 +1068,29 @@ async def business_msg(message: types.Message):
             await send_confirm(cid, "⚠️ <b>Нужна активная подписка для использования команд.</b>", conn, sec=5)
             return
 
-        # нормализуем текст: заменяем префикс на точку для удобства парсинга ниже
         parts = text.split()
         cmd = parts[0].lower()
-        # команды в коде используют "." — заменяем пользовательский префикс
         if prefix != "." and cmd.startswith(prefix):
             cmd = "." + cmd[len(prefix):]
             parts[0] = cmd
+
+        # ---- .maintenance ----
+        if cmd == ".maintenance":
+            arg = parts[1].lower() if len(parts) > 1 else ""
+            await delete_cmd(message)
+            if arg == "on":
+                async with aiosqlite.connect(DB_PATH) as db:
+                    await db.execute("INSERT OR REPLACE INTO meta (key,value) VALUES ('maintenance','1')")
+                    await db.commit()
+                await send_confirm(cid, "🔧 <b>Технические работы ВКЛЮЧЕНЫ</b>", conn, sec=10)
+            elif arg == "off":
+                async with aiosqlite.connect(DB_PATH) as db:
+                    await db.execute("INSERT OR REPLACE INTO meta (key,value) VALUES ('maintenance','0')")
+                    await db.commit()
+                await send_confirm(cid, "✅ <b>Технические работы ВЫКЛЮЧЕНЫ</b>", conn, sec=10)
+            else:
+                await send_confirm(cid, "Использование: <code>.maintenance on</code> или <code>.maintenance off</code>", conn, sec=10)
+            return
 
         # ---- .info ----
         if cmd == ".info":
@@ -1460,33 +1476,21 @@ async def business_msg(message: types.Message):
                 await send_confirm(cid, f"✅ Опубликовано {posted}/9 частей в историю", conn, sec=10)
             return
 
-        # ---- .text/.untext, .photo/.unphoto, .gs/.ungs ----
+        # ---- Заглушки .text/.photo/.gs ----
         if cmd == ".text":
-            await delete_cmd(message)
-            await send_confirm(cid, "📝 Text-режим ON (заглушка)", conn, sec=5)
-            return
+            await delete_cmd(message); await send_confirm(cid, "📝 Text ON", conn, sec=5); return
         if cmd == ".untext":
-            await delete_cmd(message)
-            await send_confirm(cid, "📝 Text-режим OFF", conn, sec=5)
-            return
+            await delete_cmd(message); await send_confirm(cid, "📝 Text OFF", conn, sec=5); return
         if cmd == ".photo":
-            await delete_cmd(message)
-            await send_confirm(cid, "📷 Photo-режим ON (заглушка)", conn, sec=5)
-            return
+            await delete_cmd(message); await send_confirm(cid, "📷 Photo ON", conn, sec=5); return
         if cmd == ".unphoto":
-            await delete_cmd(message)
-            await send_confirm(cid, "📷 Photo-режим OFF", conn, sec=5)
-            return
+            await delete_cmd(message); await send_confirm(cid, "📷 Photo OFF", conn, sec=5); return
         if cmd == ".gs":
-            await delete_cmd(message)
-            await send_confirm(cid, "🎭 GS ON (заглушка)", conn, sec=5)
-            return
+            await delete_cmd(message); await send_confirm(cid, "🎭 GS ON", conn, sec=5); return
         if cmd == ".ungs":
-            await delete_cmd(message)
-            await send_confirm(cid, "🎭 GS OFF", conn, sec=5)
-            return
+            await delete_cmd(message); await send_confirm(cid, "🎭 GS OFF", conn, sec=5); return
 
-        # ---- Wordle guess (если игра активна) ----
+        # ---- Wordle guess ----
         if cid in wordle_games and len(text.strip()) == len(wordle_games[cid]["word"]):
             g = wordle_games[cid]; guess = text.strip().lower()
             try:
@@ -1773,7 +1777,7 @@ async def on_successful_payment(message: types.Message):
         logging.error(f"successful_payment: {e}")
 
 # ============================================================
-# ЛС КОМАНДЫ (только owner)
+# ЛС КОМАНДЫ
 # ============================================================
 @dp.message(F.chat.type == "private", F.text.startswith("."), F.from_user.id == OWNER_ID)
 async def pm_commands(message: types.Message):
@@ -1821,7 +1825,6 @@ async def main():
     threading.Thread(target=run_flask, daemon=True).start()
     logging.info(f"🌐 Flask на порту {os.environ.get('PORT', 10000)} | WebApp: {WEBAPP_URL}")
 
-    # MenuButton для owner'а (WebApp)
     try:
         await bot.set_chat_menu_button(
             chat_id=OWNER_ID,
@@ -1831,7 +1834,6 @@ async def main():
     except Exception as e:
         logging.error(f"set_chat_menu_button: {e}")
 
-    # Команды в меню бота
     try:
         await bot.set_my_commands([
             BotCommand(command="start", description="Главное меню"),
