@@ -28,7 +28,7 @@ CHANNEL_LINK = "https://t.me/+MV9rTn9A6L1hNGNi"
 CHANNEL_ID = -1004412177691
 
 # Канал 2 (antispam_defender)
-CHANNEL2_LINK = "https://t.me/+E122UiwT8R5kMmZi"
+CHANNEL2_LINK = "https://t.me/+dE3Ts0iN1uQxY2Ey"
 CHANNEL2_ID = -1004352527456
 
 PRICES = {
@@ -817,7 +817,7 @@ async def background_cleanup():
         except Exception as e: logging.error(f"cleanup: {e}")
 
 # ============================================================
-# ПОДПИСКА (два канала!)
+# ПОДПИСКА (два канала)
 # ============================================================
 async def check_subscription(uid):
     """True — если подписан на ОБА канала."""
