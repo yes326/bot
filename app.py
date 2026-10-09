@@ -22,8 +22,15 @@ from aiogram.types import (
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 OWNER_USERNAME = "ysorn"
 OWNER_ID = 8502858396
+
+# Канал 1 (основной)
 CHANNEL_LINK = "https://t.me/+MV9rTn9A6L1hNGNi"
 CHANNEL_ID = -1004412177691
+
+# Канал 2 (antispam_defender)
+CHANNEL2_LINK = "https://t.me/+E122UiwT8R5kMmZi"
+CHANNEL2_ID = -1004352527456
+
 PRICES = {
     "1month":  {"rub": 100,  "stars": 65,  "days": 30,  "label": "1 месяц"},
     "6months": {"rub": 599,  "stars": 390, "days": 180, "label": "6 месяцев"},
@@ -810,18 +817,28 @@ async def background_cleanup():
         except Exception as e: logging.error(f"cleanup: {e}")
 
 # ============================================================
-# ПОДПИСКА
+# ПОДПИСКА (два канала!)
 # ============================================================
 async def check_subscription(uid):
+    """True — если подписан на ОБА канала."""
     try:
-        m = await bot.get_chat_member(CHANNEL_ID, uid)
-        return m.status not in ("left", "kicked")
+        m1 = await bot.get_chat_member(CHANNEL_ID, uid)
+        ok1 = m1.status not in ("left", "kicked")
     except Exception as e:
-        logging.error(f"sub check: {e}"); return False
+        logging.error(f"sub check ch1: {e}")
+        ok1 = False
+    try:
+        m2 = await bot.get_chat_member(CHANNEL2_ID, uid)
+        ok2 = m2.status not in ("left", "kicked")
+    except Exception as e:
+        logging.error(f"sub check ch2: {e}")
+        ok2 = False
+    return ok1 and ok2
 
 def subscribe_kb():
     return types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="📢 Подписаться", url=CHANNEL_LINK)],
+        [types.InlineKeyboardButton(text="📢 Подписаться на канал 1", url=CHANNEL_LINK)],
+        [types.InlineKeyboardButton(text="📢 Подписаться на канал 2", url=CHANNEL2_LINK)],
         [types.InlineKeyboardButton(text="✅ Проверить", callback_data="check_sub")],
     ])
 
@@ -958,8 +975,12 @@ async def start_cmd(message: types.Message):
         except ValueError: pass
 
     if not await check_subscription(uid):
-        await message.answer("⚠️ <b>Подпишись на канал, чтобы пользоваться ботом:</b>",
-                             reply_markup=subscribe_kb())
+        await message.answer(
+            "⚠️ <b>Нужна подписка на оба канала!</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "Подпишись на оба канала и нажми «✅ Проверить».",
+            reply_markup=subscribe_kb()
+        )
         return
 
     await send_photo_banner(message.chat.id, TEXT_MAIN_MENU, kb=main_menu())
@@ -1160,7 +1181,7 @@ async def business_msg(message: types.Message):
         if not text.startswith(prefix): return
         if not await check_subscription(owner_id_of_conn):
             await delete_cmd(message)
-            await send_confirm(cid, "⚠️ <b>Нужна подписка.</b>", conn, sec=5); return
+            await send_confirm(cid, "⚠️ <b>Нужна подписка на оба канала.</b>", conn, sec=5); return
 
         parts = text.split()
         cmd = parts[0].lower()
@@ -1585,14 +1606,13 @@ async def cb_check_sub(call: types.CallbackQuery):
         except: pass
         await send_photo_banner(call.message.chat.id, TEXT_MAIN_MENU, kb=main_menu())
     else:
-        await call.answer("❌ Не подписан", show_alert=True)
+        await call.answer("❌ Ты ещё не подписан на оба канала", show_alert=True)
 
 @dp.callback_query(F.data == "howto_connect")
 async def cb_howto_connect(call: types.CallbackQuery):
     try: await call.message.edit_text(TEXT_HOWTO, reply_markup=connect_bot_kb())
     except Exception:
-        try:
-            await call.message.delete()
+        try: await call.message.delete()
         except: pass
         await send_photo_banner(call.message.chat.id, TEXT_HOWTO, kb=connect_bot_kb())
     await call.answer()
