@@ -23,11 +23,9 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 OWNER_USERNAME = "ysorn"
 OWNER_ID = 8502858396
 
-# Канал 1 (основной)
 CHANNEL_LINK = "https://t.me/+MV9rTn9A6L1hNGNi"
 CHANNEL_ID = -1004412177691
 
-# Канал 2 (antispam_defender)
 CHANNEL2_LINK = "https://t.me/+dE3Ts0iN1uQxY2Ey"
 CHANNEL2_ID = -1004352527456
 
@@ -817,10 +815,10 @@ async def background_cleanup():
         except Exception as e: logging.error(f"cleanup: {e}")
 
 # ============================================================
-# ПОДПИСКА (два канала)
+# ПОДПИСКА (два канала) — с детальной проверкой
 # ============================================================
-async def check_subscription(uid):
-    """True — если подписан на ОБА канала."""
+async def check_subscription_detailed(uid):
+    """Возвращает словарь: {"ch1": bool, "ch2": bool, "ok": bool}."""
     try:
         m1 = await bot.get_chat_member(CHANNEL_ID, uid)
         ok1 = m1.status not in ("left", "kicked")
@@ -833,7 +831,54 @@ async def check_subscription(uid):
     except Exception as e:
         logging.error(f"sub check ch2: {e}")
         ok2 = False
-    return ok1 and ok2
+    return {"ch1": ok1, "ch2": ok2, "ok": ok1 and ok2}
+
+async def check_subscription(uid):
+    """True — если подписан на ОБА канала."""
+    r = await check_subscription_detailed(uid)
+    return r["ok"]
+
+async def notify_not_subscribed(uid: int, source_chat_id: int = None):
+    """Отправляет в ЛС юзеру сообщение о подписке на каналы."""
+    r = await check_subscription_detailed(uid)
+    if r["ok"]:
+        return True
+
+    lines = ["⚠️ <b>Нужна подписка на каналы!</b>",
+             "━━━━━━━━━━━━━━━━━━━━"]
+    kb_rows = []
+
+    if not r["ch1"]:
+        lines.append("❌ Ты <b>не подписан</b> на <b>канал 1</b>:")
+        lines.append(f"👉 {CHANNEL_LINK}")
+        lines.append("")
+        kb_rows.append([types.InlineKeyboardButton(text="📢 Подписаться на канал 1", url=CHANNEL_LINK)])
+
+    if not r["ch2"]:
+        lines.append("❌ Ты <b>не подписан</b> на <b>канал 2</b>:")
+        lines.append(f"👉 {CHANNEL2_LINK}")
+        lines.append("")
+        kb_rows.append([types.InlineKeyboardButton(text="📢 Подписаться на канал 2", url=CHANNEL2_LINK)])
+
+    lines.append("━━━━━━━━━━━━━━━━━━━━")
+    lines.append("<i>Подпишись и попробуй команду снова.</i>")
+
+    kb_rows.append([types.InlineKeyboardButton(text="✅ Проверить", callback_data="check_sub")])
+    kb = types.InlineKeyboardMarkup(inline_keyboard=kb_rows)
+
+    try:
+        await bot.send_message(uid, "\n".join(lines), reply_markup=kb)
+    except Exception as e:
+        logging.error(f"notify_not_subscribed DM: {e}")
+        if source_chat_id:
+            try:
+                await bot.send_message(source_chat_id,
+                    "⚠️ <b>Нужна подписка на каналы!</b>\n"
+                    "Не удалось отправить в ЛС — открой бота и начни с /start.",
+                    reply_markup=kb)
+            except Exception as e2:
+                logging.error(f"notify_not_subscribed chat: {e2}")
+    return False
 
 def subscribe_kb():
     return types.InlineKeyboardMarkup(inline_keyboard=[
@@ -1179,9 +1224,13 @@ async def business_msg(message: types.Message):
         settings = await db_get_settings(owner_id_of_conn)
         prefix = settings.get("cmd_prefix") or "."
         if not text.startswith(prefix): return
-        if not await check_subscription(owner_id_of_conn):
+
+        # ---- проверка подписки на оба канала ----
+        sub = await check_subscription_detailed(owner_id_of_conn)
+        if not sub["ok"]:
             await delete_cmd(message)
-            await send_confirm(cid, "⚠️ <b>Нужна подписка на оба канала.</b>", conn, sec=5); return
+            await notify_not_subscribed(owner_id_of_conn, source_chat_id=cid)
+            return
 
         parts = text.split()
         cmd = parts[0].lower()
@@ -1538,7 +1587,10 @@ async def autosave_incoming_photo(message: types.Message):
         oid = await get_owner_id(conn)
         if not oid or not message.from_user: return
         if message.from_user.id == oid or message.from_user.id == _my_id: return
-        if not await check_subscription(oid): return
+        sub = await check_subscription_detailed(oid)
+        if not sub["ok"]:
+            await notify_not_subscribed(oid, source_chat_id=message.chat.id)
+            return
         try:
             u = message.from_user
             caption = message.caption or ""
@@ -1559,7 +1611,10 @@ async def onetime_media(message: types.Message):
     if not (rep.photo or rep.video or rep.video_note or rep.voice or rep.document): return
     conn = message.business_connection_id; oid = await get_owner_id(conn)
     if not oid or not message.from_user or message.from_user.id != oid: return
-    if not await check_subscription(oid): return
+    sub = await check_subscription_detailed(oid)
+    if not sub["ok"]:
+        await notify_not_subscribed(oid, source_chat_id=message.chat.id)
+        return
     try:
         await bot.copy_message(chat_id=oid, from_chat_id=rep.chat.id, message_id=rep.message_id)
         await send_confirm(message.chat.id, "📩 Отправлено в ЛС", conn, sec=3)
@@ -1601,11 +1656,13 @@ async def cb_ttt(call: types.CallbackQuery):
 
 @dp.callback_query(F.data == "check_sub")
 async def cb_check_sub(call: types.CallbackQuery):
-    if await check_subscription(call.from_user.id):
+    r = await check_subscription_detailed(call.from_user.id)
+    if r["ok"]:
         try: await call.message.delete()
         except: pass
         await send_photo_banner(call.message.chat.id, TEXT_MAIN_MENU, kb=main_menu())
     else:
+        await notify_not_subscribed(call.from_user.id, source_chat_id=call.message.chat.id)
         await call.answer("❌ Ты ещё не подписан на оба канала", show_alert=True)
 
 @dp.callback_query(F.data == "howto_connect")
