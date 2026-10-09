@@ -80,14 +80,13 @@ rps_games = {}
 ttt_games = {}
 wordle_games = {}
 processed_updates = {}
-# id сообщений, удалённых ботом — с TTL
 deleted_by_bot = {}
-DELETED_BY_BOT_TTL = 10  # секунд
+DELETED_BY_BOT_TTL = 10
 type_styles = {}
 user_settings_cache = {}
 _monotonic_count = ENV_MAX_SEEN
 _last_bio = ""
-_my_id = None  # узнаем при старте
+_my_id = None
 
 EIGHTBALL = [
     "🎱 Да, определённо.","🎱 Без сомнений.","🎱 Всё говорит о том, что да.",
@@ -112,7 +111,7 @@ TYPE_STYLES = {
 }
 
 # ============================================================
-# УТИЛИТА: удаление-ботом с TTL
+# УТИЛИТЫ ДЛЯ deleted_by_bot
 # ============================================================
 def mark_deleted_by_bot(mid: int):
     deleted_by_bot[mid] = time.time()
@@ -159,6 +158,16 @@ async def init_db():
             user_id INTEGER,
             until TEXT,
             PRIMARY KEY (chat_id, user_id)
+        )""")
+        await db.execute("""CREATE TABLE IF NOT EXISTS contacts (
+            owner_id INTEGER,
+            peer_id INTEGER,
+            peer_username TEXT,
+            peer_name TEXT,
+            first_seen TEXT,
+            last_seen TEXT,
+            msg_count INTEGER DEFAULT 0,
+            PRIMARY KEY (owner_id, peer_id)
         )""")
         await db.commit()
     logging.info("✅ БД инициализирована")
@@ -269,6 +278,50 @@ async def db_clear_mute(chat_id: int, user_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("DELETE FROM mutes WHERE chat_id=? AND user_id=?", (chat_id, user_id))
         await db.commit()
+
+# ============================================================
+# КОНТАКТЫ (/who)
+# ============================================================
+async def db_touch_contact(owner_id: int, peer_id: int, peer_username: str, peer_name: str):
+    now = datetime.now().isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT msg_count FROM contacts WHERE owner_id=? AND peer_id=?",
+            (owner_id, peer_id)
+        )
+        row = await cur.fetchone()
+        if row:
+            await db.execute("""UPDATE contacts
+                                SET peer_username=?, peer_name=?, last_seen=?, msg_count=msg_count+1
+                                WHERE owner_id=? AND peer_id=?""",
+                             (peer_username, peer_name, now, owner_id, peer_id))
+        else:
+            await db.execute("""INSERT INTO contacts
+                                (owner_id, peer_id, peer_username, peer_name, first_seen, last_seen, msg_count)
+                                VALUES (?, ?, ?, ?, ?, ?, 1)""",
+                             (owner_id, peer_id, peer_username, peer_name, now, now))
+        await db.commit()
+
+async def db_find_contact_by_username(username: str):
+    username = username.strip().lstrip("@").lower()
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        if username:
+            cur = await db.execute(
+                "SELECT * FROM contacts WHERE LOWER(peer_username)=? ORDER BY last_seen DESC LIMIT 5",
+                (username,)
+            )
+            rows = await cur.fetchall()
+            if rows: return rows
+        try:
+            pid = int(username)
+            cur = await db.execute(
+                "SELECT * FROM contacts WHERE peer_id=? ORDER BY last_seen DESC LIMIT 5",
+                (pid,)
+            )
+            return await cur.fetchall()
+        except ValueError:
+            return []
 
 # ============================================================
 # НАСТРОЙКИ
@@ -829,7 +882,6 @@ async def background_name_updater():
         await update_bot_description()
 
 async def background_cleanup():
-    """Раз в 30 сек чистим старые записи deleted_by_bot."""
     while True:
         await asyncio.sleep(30)
         try:
@@ -873,10 +925,17 @@ async def get_owner_id(conn):
 # ============================================================
 def main_menu():
     return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="🔗 Подключить бота", callback_data="howto_connect")],
         [types.InlineKeyboardButton(text="📖 Команды", callback_data="cmd_list")],
         [types.InlineKeyboardButton(text="💎 Подписка", callback_data="sub_menu")],
         [types.InlineKeyboardButton(text="👥 Пригласить друга", callback_data="ref_menu")],
         [types.InlineKeyboardButton(text="⚙️ Настройки", web_app=WebAppInfo(url=WEBAPP_URL))],
+    ])
+
+def connect_bot_kb():
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="🔗 Открыть Chatbots", url="tg://settings/business/chatbots")],
+        [types.InlineKeyboardButton(text="⬅️ Назад", callback_data="back")],
     ])
 
 def back_kb():
@@ -896,6 +955,18 @@ def plans_kb(uid=None):
 TEXT_MAIN_MENU = ("🏠 <b>Главное меню</b>\n━━━━━━━━━━━━━━━━━━━━\n"
                   "🛡 <b>AntiSpam Defender</b> — защита от спама в бизнес-чатах Telegram.\n\n"
                   "Подключите бота к своему аккаунту и управляйте командами прямо в переписке.")
+
+TEXT_HOWTO = (
+    "📚 <b>Как подключить бота</b>\n"
+    "━━━━━━━━━━━━━━━━━━━━\n\n"
+    "1️⃣ Нажми <b>🔗 Открыть Chatbots</b> ниже.\n"
+    "2️⃣ Введи <code>@AntiSpam_Defender_bot</code> в поле поиска.\n"
+    "3️⃣ Нажми <b>Добавить</b>.\n"
+    "4️⃣ Включи разрешение <b>Reply to messages</b>.\n"
+    "5️⃣ Готово — команды заработают в переписках.\n\n"
+    "<i>Если кнопка не сработала, открой вручную: "
+    "Настройки → Telegram Business → Чат-боты.</i>"
+)
 
 TEXT_CMD_LIST = (
     "📖 <b>Команды бота</b>\n"
@@ -933,6 +1004,9 @@ TEXT_CMD_LIST = (
     "<code>.nonmute on/off</code> — игнор мута\n"
     "<code>.ghost on/off</code> — копия в ЛС\n"
     "<code>.story</code> — фото (реплай) в историю\n\n"
+    "<b>🔍 Поиск (в ЛС)</b>\n"
+    "<code>/who @username</code> — найти собеседника\n"
+    "<code>/who 123456789</code> — поиск по ID\n\n"
     "<b>⚙️ Владелец</b>\n"
     "<code>.maintenance on/off</code> — тех.работы\n"
     "<code>.st текст</code> — жирный текст"
@@ -991,6 +1065,55 @@ async def stats_cmd(message: types.Message):
     await message.answer(text)
 
 # ============================================================
+# /who (в ЛС, только владелец)
+# ============================================================
+@dp.message(F.chat.type == "private", F.text.startswith("/who"), F.from_user.id == OWNER_ID)
+async def who_cmd(message: types.Message):
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer(
+            "📖 <b>Использование:</b>\n"
+            "<code>/who @username</code> — поиск по username\n"
+            "<code>/who 123456789</code> — поиск по ID\n\n"
+            "<i>Показываю, с кем этот человек в чате.</i>"
+        )
+        return
+
+    query = parts[1].strip()
+    rows = await db_find_contact_by_username(query)
+    if not rows:
+        await message.answer(f"❌ Не найдено: <code>{query}</code>\n\n"
+                             f"<i>Человек ещё не писал ни в один бизнес-чат.</i>")
+        return
+
+    for row in rows:
+        peer_username = f"@{row['peer_username']}" if row["peer_username"] else "—"
+        peer_name = row["peer_name"] or "—"
+        try:
+            owner = await bot.get_chat(row["owner_id"])
+            owner_str = f"@{owner.username}" if owner.username else owner.full_name
+        except Exception:
+            owner_str = f"id {row['owner_id']}"
+        try:
+            fs = datetime.fromisoformat(row["first_seen"]).strftime("%d.%m.%Y %H:%M")
+        except: fs = "—"
+        try:
+            ls = datetime.fromisoformat(row["last_seen"]).strftime("%d.%m.%Y %H:%M")
+        except: ls = "—"
+
+        text = (
+            f"👤 <b>Пользователь:</b> {peer_username}\n"
+            f"📛 <b>Имя:</b> {peer_name}\n"
+            f"🆔 <b>ID:</b> <code>{row['peer_id']}</code>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔗 <b>Ведёт переписку с:</b> {owner_str} (<code>{row['owner_id']}</code>)\n"
+            f"🕐 <b>Первое сообщение:</b> {fs}\n"
+            f"🕐 <b>Последнее:</b> {ls}\n"
+            f"📊 <b>Сообщений:</b> {row['msg_count']}"
+        )
+        await message.answer(text)
+
+# ============================================================
 # BUSINESS CONNECTION
 # ============================================================
 @dp.business_connection()
@@ -1025,22 +1148,17 @@ async def on_deleted_messages(event: types.BusinessMessagesDeleted):
         cached_all = message_cache.get(cid, {})
 
         for mid in event.message_ids:
-            # Удалено ботом — игнор
             if is_deleted_by_bot(mid):
                 logging.info(f"⏭ Удалено ботом {mid} — пропуск")
                 continue
-
             data = cached_all.get(mid)
             if not data:
                 logging.info(f"⏭ Сообщение {mid} не в кэше — пропуск")
                 continue
-
             author_id = data.get("from_id")
-            # Сообщение от бота или владельца — не уведомляем
             if author_id == owner_id_of_conn or author_id == _my_id:
-                logging.info(f"⏭ Автор {author_id} — пропуск уведомления")
+                logging.info(f"⏭ Автор {author_id} — пропуск")
                 continue
-
             if settings["notify_delete"]:
                 from_name = data.get("from_name", "—")
                 preview = (data.get("text") or "[медиа]")[:200]
@@ -1130,6 +1248,15 @@ async def business_msg(message: types.Message):
             if str(message.from_user.id) in [str(x) for x in settings["excluded_chats"]]:
                 logging.info(f"⏭ Исключённый чат: {message.from_user.id}")
                 return
+            try:
+                await db_touch_contact(
+                    owner_id_of_conn,
+                    message.from_user.id,
+                    message.from_user.username or "",
+                    message.from_user.full_name or "",
+                )
+            except Exception as e:
+                logging.error(f"touch_contact: {e}")
 
         if is_incoming:
             muted_until = await db_get_mute(cid, message.from_user.id)
@@ -1200,20 +1327,15 @@ async def business_msg(message: types.Message):
                 await delete_cmd(message)
                 await send_confirm(cid, "🚫 <b>Команда только для владельца</b>", conn, sec=5)
                 return
-
             arg = parts[1].lower() if len(parts) > 1 else ""
             await delete_cmd(message)
-
             if arg == "on":
                 async with aiosqlite.connect(DB_PATH) as db:
                     await db.execute("INSERT OR REPLACE INTO meta (key,value) VALUES ('maintenance','1')")
                     await db.commit()
                 await send_confirm(cid, "🔧 <b>Технические работы ВКЛЮЧЕНЫ</b>\nРассылаю уведомления...", conn, sec=5)
                 sent, failed = await broadcast_to_all_users(
-                    "🔧 <b>Технические работы</b>\n\n"
-                    "Бот временно недоступен — ведутся технические работы.\n"
-                    "Некоторые команды могут не отвечать.\n\n"
-                    "Спасибо за понимание! 🛡"
+                    "🔧 <b>Технические работы</b>\n\nБот временно недоступен.\n\nСпасибо за понимание! 🛡"
                 )
                 await send_confirm(cid, f"📢 Отправлено: <b>{sent}</b> | ошибок: <b>{failed}</b>", conn, sec=15)
             elif arg == "off":
@@ -1222,9 +1344,7 @@ async def business_msg(message: types.Message):
                     await db.commit()
                 await send_confirm(cid, "✅ <b>Технические работы ВЫКЛЮЧЕНЫ</b>\nРассылаю уведомления...", conn, sec=5)
                 sent, failed = await broadcast_to_all_users(
-                    "✅ <b>Технические работы завершены</b>\n\n"
-                    "Бот снова работает в обычном режиме.\n"
-                    "Все команды доступны. 🛡"
+                    "✅ <b>Технические работы завершены</b>\n\nБот снова работает. 🛡"
                 )
                 await send_confirm(cid, f"📢 Отправлено: <b>{sent}</b> | ошибок: <b>{failed}</b>", conn, sec=15)
             else:
@@ -1316,7 +1436,7 @@ async def business_msg(message: types.Message):
                 if len(parts) < 3:
                     await delete_cmd(message)
                     sl = ", ".join(f"<code>{s}</code>" for s in TYPE_STYLES)
-                    await send_confirm(cid, f"🎨 Доступные стили: {sl}\nИспользование: .type on bold", conn, sec=15)
+                    await send_confirm(cid, f"🎨 Стили: {sl}", conn, sec=15)
                     return
                 style = parts[2].lower()
                 if style not in TYPE_STYLES:
@@ -1478,10 +1598,10 @@ async def business_msg(message: types.Message):
                 await send_confirm(cid, "❌ Слишком длинно", conn, sec=5); return
             r = calc_expr(expr)
             if r is None:
-                await send_confirm(cid, "❌ Ошибка в выражении", conn, sec=5)
+                await send_confirm(cid, "❌ Ошибка", conn, sec=5)
             else:
                 if isinstance(r, float) and r.is_integer(): r = int(r)
-                await send_confirm(cid, f"🧮 <b>Калькулятор</b>\n<code>{expr}</code> = <b>{r}</b>", conn, sec=20)
+                await send_confirm(cid, f"🧮 <code>{expr}</code> = <b>{r}</b>", conn, sec=20)
             return
 
         # ---- .qr ----
@@ -1495,11 +1615,9 @@ async def business_msg(message: types.Message):
             try:
                 img = qrcode.make(qt); buf = io.BytesIO(); img.save(buf, "PNG"); buf.seek(0)
                 await bot.send_photo(chat_id=cid, photo=BufferedInputFile(buf.read(), filename="qr.png"),
-                                     caption=f"📱 <b>QR-код</b>\n<code>{qt[:80]}</code>",
-                                     business_connection_id=conn)
+                                     caption=f"📱 <b>QR-код</b>", business_connection_id=conn)
             except Exception as e:
                 logging.error(f"QR: {e}")
-                await send_confirm(cid, "❌ Не удалось создать QR", conn, sec=5)
             return
 
         # ---- .dl ----
@@ -1607,22 +1725,14 @@ async def business_msg(message: types.Message):
             if posted == 0 and last_err:
                 await send_confirm(cid, f"❌ Ошибка story: {last_err}", conn, sec=10)
             else:
-                await send_confirm(cid, f"✅ Опубликовано {posted}/9 частей в историю", conn, sec=10)
+                await send_confirm(cid, f"✅ Опубликовано {posted}/9 частей", conn, sec=10)
             return
 
         # ---- Заглушки ----
-        if cmd == ".text":
-            await delete_cmd(message); await send_confirm(cid, "📝 Text ON", conn, sec=5); return
-        if cmd == ".untext":
-            await delete_cmd(message); await send_confirm(cid, "📝 Text OFF", conn, sec=5); return
-        if cmd == ".photo":
-            await delete_cmd(message); await send_confirm(cid, "📷 Photo ON", conn, sec=5); return
-        if cmd == ".unphoto":
-            await delete_cmd(message); await send_confirm(cid, "📷 Photo OFF", conn, sec=5); return
-        if cmd == ".gs":
-            await delete_cmd(message); await send_confirm(cid, "🎭 GS ON", conn, sec=5); return
-        if cmd == ".ungs":
-            await delete_cmd(message); await send_confirm(cid, "🎭 GS OFF", conn, sec=5); return
+        if cmd in (".text", ".untext", ".photo", ".unphoto", ".gs", ".ungs"):
+            await delete_cmd(message)
+            await send_confirm(cid, f"✅ {cmd} OK", conn, sec=5)
+            return
 
         # ---- Wordle guess ----
         if cid in wordle_games and len(text.strip()) == len(wordle_games[cid]["word"]):
@@ -1647,7 +1757,7 @@ async def business_msg(message: types.Message):
         logging.error(f"business_msg: {e}")
 
 # ============================================================
-# АВТОСОХРАНЕНИЕ ВХОДЯЩИХ ФОТО В ЛС ВЛАДЕЛЬЦУ
+# АВТОСОХРАНЕНИЕ ВХОДЯЩИХ ФОТО
 # ============================================================
 @dp.business_message(F.photo)
 async def autosave_incoming_photo(message: types.Message):
@@ -1655,12 +1765,9 @@ async def autosave_incoming_photo(message: types.Message):
         conn = message.business_connection_id
         oid = await get_owner_id(conn)
         if not oid: return
-        # Только от собеседников (не от владельца, не от бота)
         if not message.from_user: return
         if message.from_user.id == oid or message.from_user.id == _my_id: return
-        # Подписан ли владелец
         if not await check_subscription(oid): return
-        # Пересылаем в ЛС
         try:
             u = message.from_user
             caption = message.caption or ""
@@ -1671,14 +1778,14 @@ async def autosave_incoming_photo(message: types.Message):
                         f"👤 {u.full_name} <code>{u.id}</code>\n"
                         f"{('💬 ' + caption) if caption else ''}",
             )
-            logging.info(f"📸 Фото сохранено в ЛС владельца (от {u.id})")
+            logging.info(f"📸 Фото сохранено в ЛС (от {u.id})")
         except Exception as e:
             logging.error(f"autosave photo: {e}")
     except Exception as e:
         logging.error(f"autosave_incoming_photo: {e}")
 
 # ============================================================
-# ОДНОРАЗОВОЕ (реплай на медиа → в ЛС)
+# ОДНОРАЗОВОЕ
 # ============================================================
 @dp.business_message(F.reply_to_message)
 async def onetime_media(message: types.Message):
@@ -1747,6 +1854,14 @@ async def cb_check_sub(call: types.CallbackQuery):
     else:
         await call.answer("❌ Ты ещё не подписан", show_alert=True)
 
+@dp.callback_query(F.data == "howto_connect")
+async def cb_howto_connect(call: types.CallbackQuery):
+    try:
+        await call.message.edit_text(TEXT_HOWTO, reply_markup=connect_bot_kb())
+    except Exception:
+        await call.message.answer(TEXT_HOWTO, reply_markup=connect_bot_kb())
+    await call.answer()
+
 @dp.callback_query(F.data == "cmd_list")
 async def cb_cmds(call: types.CallbackQuery):
     try: await call.message.delete()
@@ -1801,7 +1916,6 @@ async def cb_pay(call: types.CallbackQuery):
     plan = call.data.split("_", 1)[1]
     p = PRICES.get(plan)
     if not p: await call.answer("❌"); return
-    # Ссылка на чат с @ysorn + автоподстановка текста
     card_text = urllib.parse.quote(
         f"Здравствуйте! Хочу оплатить AntiSpam Defender картой.\n"
         f"📦 Тариф: {p['label']}\n"
@@ -1818,9 +1932,9 @@ async def cb_pay(call: types.CallbackQuery):
             f"📦 Тариф: <b>{p['label']}</b>\n"
             f"💰 Сумма: <b>{p['rub']}₽</b> / <b>{p['stars']}⭐</b>\n"
             f"💱 Валюта: RUB / XTR\n━━━━━━━━━━━━━━━━━━━━\n"
-            "⭐ <b>Оплатить звёздами</b> — быстро\n"
-            "💳 <b>Оплатить картой</b> — откроется чат с @ysorn\n"
-            "<i>После оплаты картой нажми «✅ Я оплатил(а)».</i>")
+            "⭐ <b>Оплатить звёздами</b>\n"
+            "💳 <b>Оплатить картой</b> — чат с @ysorn\n"
+            "<i>После оплаты нажми «✅ Я оплатил(а)».</i>")
     try: await call.message.delete()
     except: pass
     await send_photo_banner(call.message.chat.id, text, kb=kb)
@@ -1847,7 +1961,7 @@ async def cb_stars(call: types.CallbackQuery):
 async def cb_paid(call: types.CallbackQuery):
     plan = call.data.split("_", 1)[1]
     pending_payments[call.from_user.id] = {"plan": plan, "at": time.time()}
-    await call.message.answer("📸 <b>Пришли скриншот оплаты в этот чат.</b>\nОн будет отправлен владельцу на проверку.")
+    await call.message.answer("📸 <b>Пришли скриншот оплаты в этот чат.</b>")
 
 @dp.message(F.photo)
 async def on_screenshot(message: types.Message):
@@ -1888,7 +2002,7 @@ async def cb_approve(call: types.CallbackQuery):
 async def cb_reject(call: types.CallbackQuery):
     if call.from_user.id != OWNER_ID: await call.answer("❌"); return
     uid = int(call.data.split("_")[1])
-    try: await bot.send_message(uid, "❌ Оплата не подтверждена. Свяжитесь с @ysorn.")
+    try: await bot.send_message(uid, "❌ Оплата не подтверждена.")
     except: pass
     try: await call.message.edit_caption(caption=f"❌ Отклонено: <code>{uid}</code>")
     except: pass
@@ -1901,10 +2015,10 @@ async def cb_reject(call: types.CallbackQuery):
 async def pre_checkout_handler(pcq: PreCheckoutQuery):
     try:
         await pcq.answer(ok=True)
-        logging.info(f"⭐ Pre-checkout: user={pcq.from_user.id} payload={pcq.invoice_payload}")
+        logging.info(f"⭐ Pre-checkout: user={pcq.from_user.id}")
     except Exception as e:
         logging.error(f"pre_checkout: {e}")
-        try: await pcq.answer(ok=False, error_message="Ошибка, попробуйте позже")
+        try: await pcq.answer(ok=False, error_message="Ошибка")
         except: pass
 
 @dp.message(F.successful_payment)
@@ -1920,18 +2034,16 @@ async def on_successful_payment(message: types.Message):
         cur = await get_subscription(uid) or now
         until = max(cur, now) + timedelta(days=days)
         await set_subscription(uid, until)
-        logging.info(f"⭐ Оплата: user={uid} plan={plan} stars={stars}")
         await message.answer(
             f"✅ <b>Оплата получена!</b>\n━━━━━━━━━━━━━━━━━━━━\n"
             f"⭐ Звёзд: <b>{stars}</b>\n📦 Тариф: <b>{PRICES[plan]['label']}</b>\n"
-            f"💎 Дней: <b>{days}</b>\n📅 Подписка до: <b>{until.strftime('%d.%m.%Y')}</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━\nСпасибо! 🎉"
+            f"📅 Подписка до: <b>{until.strftime('%d.%m.%Y')}</b>"
         )
         try:
             await bot.send_message(OWNER_ID,
                                    f"💰 <b>Новая оплата звёздами</b>\n"
                                    f"👤 @{message.from_user.username or '—'} (<code>{uid}</code>)\n"
-                                   f"⭐ Звёзд: <b>{stars}</b>\n📦 Тариф: <b>{plan}</b>")
+                                   f"⭐ Звёзд: <b>{stars}</b> | 📦 <b>{plan}</b>")
         except: pass
     except Exception as e:
         logging.error(f"successful_payment: {e}")
@@ -1944,12 +2056,11 @@ async def pm_commands(message: types.Message):
     parts = (message.text or "").strip().split()
     if not parts: return
     if parts[0] == ".help":
-        await message.answer("📖 <code>.mute @user N</code>, <code>.unmute @user</code>")
+        await message.answer("📖 <code>.mute @user N</code>")
 
-@dp.message(F.chat.type == "private", ~F.text.startswith("."))
+@dp.message(F.chat.type == "private", ~F.text.startswith("."), ~F.text.startswith("/"))
 async def forward_to_owner(message: types.Message):
     if message.from_user.id == OWNER_ID: return
-    if message.text and message.text.startswith("/"): return
     try:
         text = message.text or "[медиа]"
         u = message.from_user
@@ -1986,6 +2097,7 @@ async def main():
     try:
         await bot.set_my_commands([
             BotCommand(command="start", description="Главное меню"),
+            BotCommand(command="who", description="Найти собеседника"),
         ])
     except Exception as e:
         logging.error(f"set_my_commands: {e}")
