@@ -26,7 +26,7 @@ OWNER_ID = 8502858396
 CHANNEL_LINK = "https://t.me/+MV9rTn9A6L1hNGNi"
 CHANNEL_ID = -1004412177691
 
-CHANNEL2_LINK = "https://t.me/+dE3Ts0iN1uQxY2Ey"
+CHANNEL2_LINK = "https://t.me/+ZR7yUdKofyY0YzBi"
 CHANNEL2_ID = -1004352527456
 
 PRICES = {
@@ -815,10 +815,9 @@ async def background_cleanup():
         except Exception as e: logging.error(f"cleanup: {e}")
 
 # ============================================================
-# ПОДПИСКА (два канала) — с детальной проверкой
+# ПОДПИСКА
 # ============================================================
 async def check_subscription_detailed(uid):
-    """Возвращает словарь: {"ch1": bool, "ch2": bool, "ok": bool}."""
     try:
         m1 = await bot.get_chat_member(CHANNEL_ID, uid)
         ok1 = m1.status not in ("left", "kicked")
@@ -834,38 +833,30 @@ async def check_subscription_detailed(uid):
     return {"ch1": ok1, "ch2": ok2, "ok": ok1 and ok2}
 
 async def check_subscription(uid):
-    """True — если подписан на ОБА канала."""
     r = await check_subscription_detailed(uid)
     return r["ok"]
 
 async def notify_not_subscribed(uid: int, source_chat_id: int = None):
-    """Отправляет в ЛС юзеру сообщение о подписке на каналы."""
     r = await check_subscription_detailed(uid)
     if r["ok"]:
         return True
-
     lines = ["⚠️ <b>Нужна подписка на каналы!</b>",
              "━━━━━━━━━━━━━━━━━━━━"]
     kb_rows = []
-
     if not r["ch1"]:
         lines.append("❌ Ты <b>не подписан</b> на <b>канал 1</b>:")
         lines.append(f"👉 {CHANNEL_LINK}")
         lines.append("")
         kb_rows.append([types.InlineKeyboardButton(text="📢 Подписаться на канал 1", url=CHANNEL_LINK)])
-
     if not r["ch2"]:
         lines.append("❌ Ты <b>не подписан</b> на <b>канал 2</b>:")
         lines.append(f"👉 {CHANNEL2_LINK}")
         lines.append("")
         kb_rows.append([types.InlineKeyboardButton(text="📢 Подписаться на канал 2", url=CHANNEL2_LINK)])
-
     lines.append("━━━━━━━━━━━━━━━━━━━━")
     lines.append("<i>Подпишись и попробуй команду снова.</i>")
-
     kb_rows.append([types.InlineKeyboardButton(text="✅ Проверить", callback_data="check_sub")])
     kb = types.InlineKeyboardMarkup(inline_keyboard=kb_rows)
-
     try:
         await bot.send_message(uid, "\n".join(lines), reply_markup=kb)
     except Exception as e:
@@ -1225,7 +1216,7 @@ async def business_msg(message: types.Message):
         prefix = settings.get("cmd_prefix") or "."
         if not text.startswith(prefix): return
 
-        # ---- проверка подписки на оба канала ----
+        # проверка подписки на оба канала
         sub = await check_subscription_detailed(owner_id_of_conn)
         if not sub["ok"]:
             await delete_cmd(message)
