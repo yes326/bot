@@ -26,7 +26,7 @@ OWNER_ID = 8502858396
 CHANNEL_LINK = "https://t.me/+MV9rTn9A6L1hNGNi"
 CHANNEL_ID = -1004412177691
 
-CHANNEL2_LINK = "https://t.me/+ZR7yUdKofyY0YzBi"
+CHANNEL2_LINK = "https://t.me/+12YE0v4TuEkxYmIy"
 CHANNEL2_ID = -1004352527456
 
 PRICES = {
@@ -1216,7 +1216,6 @@ async def business_msg(message: types.Message):
         prefix = settings.get("cmd_prefix") or "."
         if not text.startswith(prefix): return
 
-        # проверка подписки на оба канала
         sub = await check_subscription_detailed(owner_id_of_conn)
         if not sub["ok"]:
             await delete_cmd(message)
@@ -1229,7 +1228,6 @@ async def business_msg(message: types.Message):
             cmd = "." + cmd[len(prefix):]
             parts[0] = cmd
 
-        # .maintenance
         if cmd == ".maintenance":
             msg_user = message.from_user
             is_owner_by_username = (msg_user and msg_user.username and msg_user.username.lower() == OWNER_USERNAME.lower())
@@ -1256,7 +1254,6 @@ async def business_msg(message: types.Message):
                 await send_confirm(cid, "Использование: <code>.maintenance on/off</code>", conn, sec=10)
             return
 
-        # .info
         if cmd == ".info":
             await delete_cmd(message)
             t = message.reply_to_message.from_user if message.reply_to_message else None
@@ -1268,7 +1265,6 @@ async def business_msg(message: types.Message):
                 f"👤 <b>{t.full_name}</b>\n🆔 <code>{t.id}</code>\n📛 {un}\n⭐ {pm}\n━━━━━━━━━━━━━━━━━━━━",
                 conn, sec=15); return
 
-        # .weather
         if cmd == ".weather":
             if len(parts) < 2: await delete_cmd(message); return
             city = " ".join(parts[1:]); await delete_cmd(message)
@@ -1276,7 +1272,6 @@ async def business_msg(message: types.Message):
             r = await get_weather(city)
             await send_confirm(cid, r if r else "❌ Город не найден", conn, sec=30); return
 
-        # .translate
         if cmd == ".translate":
             if len(parts) < 2: await delete_cmd(message); return
             src = " ".join(parts[1:]); await delete_cmd(message)
@@ -1287,7 +1282,6 @@ async def business_msg(message: types.Message):
             else: await send_confirm(cid, "❌ Не удалось", conn, sec=5)
             return
 
-        # .roll
         if cmd == ".roll":
             await delete_cmd(message)
             try:
@@ -1299,18 +1293,15 @@ async def business_msg(message: types.Message):
             res = [random.randint(1, m) for _ in range(n)]
             await send_confirm(cid, f"🎲 <b>{', '.join(map(str, res))}</b>\nΣ {sum(res)}", conn, sec=15); return
 
-        # .coin
         if cmd == ".coin":
             await delete_cmd(message)
             await send_confirm(cid, random.choice(["🪙 Орёл", "🪙 Решка"]), conn, sec=10); return
 
-        # .8ball
         if cmd == ".8ball":
             await delete_cmd(message)
             if len(parts) < 2: await send_confirm(cid, "❓ Задай вопрос", conn, sec=5); return
             await send_confirm(cid, f"❓ <i>{' '.join(parts[1:])}</i>\n\n{random.choice(EIGHTBALL)}", conn, sec=20); return
 
-        # .type
         if cmd == ".type":
             arg = parts[1].lower() if len(parts) > 1 else ""
             if arg == "off":
@@ -1327,7 +1318,6 @@ async def business_msg(message: types.Message):
                 type_styles[cid] = style; await delete_cmd(message)
                 await send_confirm(cid, f"✏️ Стиль <b>{style}</b>", conn, sec=5); return
 
-        # .mute
         if cmd == ".mute":
             try: mins = int(parts[1]) if len(parts) > 1 else 10
             except ValueError: mins = 10
@@ -1340,7 +1330,6 @@ async def business_msg(message: types.Message):
             await db_set_mute(cid, tid, until); await delete_cmd(message)
             await send_confirm(cid, f"🔇 <b>Мут</b> {mins} мин. для <code>{tid}</code>", conn, sec=10); return
 
-        # .unmute
         if cmd == ".unmute":
             if not message.reply_to_message or not message.reply_to_message.from_user:
                 await delete_cmd(message); return
@@ -1348,7 +1337,6 @@ async def business_msg(message: types.Message):
             await db_clear_mute(cid, tid); await delete_cmd(message)
             await send_confirm(cid, f"🔊 Мут снят с <code>{tid}</code>", conn, sec=10); return
 
-        # .warn
         if cmd == ".warn":
             try: cnt = int(parts[1]) if len(parts) > 1 else 1
             except ValueError: cnt = 1
@@ -1365,7 +1353,6 @@ async def business_msg(message: types.Message):
                 await db_reset_warn(cid, tid)
             return
 
-        # .unwarn
         if cmd == ".unwarn":
             if not message.reply_to_message or not message.reply_to_message.from_user:
                 await delete_cmd(message); return
@@ -1373,7 +1360,6 @@ async def business_msg(message: types.Message):
             await db_reset_warn(cid, tid); await delete_cmd(message)
             await send_confirm(cid, f"✅ Варны сняты с <code>{tid}</code>", conn, sec=10); return
 
-        # .spam
         if cmd == ".spam":
             if len(parts) < 3: await delete_cmd(message); return
             try: cnt = min(int(parts[1]), 30)
@@ -1385,7 +1371,6 @@ async def business_msg(message: types.Message):
                 await asyncio.sleep(0.15)
             return
 
-        # .st
         if cmd == ".st":
             if len(parts) < 2: await delete_cmd(message); return
             s = " ".join(parts[1:]); await delete_cmd(message)
@@ -1393,7 +1378,6 @@ async def business_msg(message: types.Message):
             except Exception as e: logging.error(f"st: {e}")
             return
 
-        # .clone
         if cmd == ".clone":
             if len(parts) < 2: await delete_cmd(message); return
             if parts[1].lower() == "on":
@@ -1404,7 +1388,6 @@ async def business_msg(message: types.Message):
                 await send_confirm(cid, "👥 Клонирование выкл", conn, sec=5)
             return
 
-        # .nonmute
         if cmd == ".nonmute":
             arg = parts[1].lower() if len(parts) > 1 else ""
             if arg == "on":
@@ -1416,7 +1399,6 @@ async def business_msg(message: types.Message):
             else: await delete_cmd(message)
             return
 
-        # .ghost
         if cmd == ".ghost":
             arg = parts[1].lower() if len(parts) > 1 else ""
             if arg == "on":
@@ -1428,7 +1410,6 @@ async def business_msg(message: types.Message):
             else: await delete_cmd(message)
             return
 
-        # .echo
         if cmd == ".echo":
             if len(parts) < 2: await delete_cmd(message); return
             if parts[1].lower() == "on":
@@ -1439,7 +1420,6 @@ async def business_msg(message: types.Message):
                 await send_confirm(cid, "🔇 Echo OFF", conn, sec=5)
             return
 
-        # .calc/.c
         if cmd in (".calc", ".c"):
             if len(parts) < 2: await delete_cmd(message); return
             expr = " ".join(parts[1:]); await delete_cmd(message)
@@ -1451,7 +1431,6 @@ async def business_msg(message: types.Message):
                 await send_confirm(cid, f"🧮 <code>{expr}</code> = <b>{r}</b>", conn, sec=20)
             return
 
-        # .qr
         if cmd == ".qr":
             if len(parts) < 2: await delete_cmd(message); return
             qt = " ".join(parts[1:]); await delete_cmd(message)
@@ -1463,7 +1442,6 @@ async def business_msg(message: types.Message):
             except Exception as e: logging.error(f"QR: {e}")
             return
 
-        # .dl
         if cmd == ".dl":
             if len(parts) < 3: await delete_cmd(message); return
             try: sec = min(int(parts[1]), 300)
@@ -1475,7 +1453,6 @@ async def business_msg(message: types.Message):
             except Exception as e: logging.error(f"dl: {e}")
             return
 
-        # .txt
         if cmd == ".txt":
             if len(parts) < 2: await delete_cmd(message); return
             src = " ".join(parts[1:]); await delete_cmd(message)
@@ -1494,7 +1471,6 @@ async def business_msg(message: types.Message):
             except Exception as e: logging.error(f"txt: {e}")
             return
 
-        # .price
         if cmd == ".price":
             await delete_cmd(message)
             try:
@@ -1502,7 +1478,6 @@ async def business_msg(message: types.Message):
             except Exception as e: logging.error(f"price: {e}")
             return
 
-        # .rps
         if cmd == ".rps":
             await delete_cmd(message)
             bc = types.InlineKeyboardMarkup(inline_keyboard=[[
@@ -1512,13 +1487,11 @@ async def business_msg(message: types.Message):
             ]])
             await send_confirm(cid, "🎮 <b>Камень-Ножницы-Бумага</b>\nВыбери:", conn, kb=bc); return
 
-        # .ttt
         if cmd == ".ttt":
             await delete_cmd(message)
             ttt_games[cid] = {"board": [" "]*9}
             await send_confirm(cid, "❌ <b>Крестики-нолики</b>\nТвой ход:", conn, kb=ttt_kb(cid)); return
 
-        # .wordle
         if cmd == ".wordle":
             if len(parts) < 2: await delete_cmd(message); return
             w = parts[1].lower()
@@ -1527,7 +1500,6 @@ async def business_msg(message: types.Message):
             wordle_games[cid] = {"word": w, "tries": 6, "history": []}
             await delete_cmd(message); await send_confirm(cid, wordle_r(wordle_games[cid]), conn); return
 
-        # .story
         if cmd == ".story":
             if not message.reply_to_message or not message.reply_to_message.photo:
                 await delete_cmd(message); await send_confirm(cid, "❌ Ответь на фото", conn, sec=5); return
@@ -1548,11 +1520,9 @@ async def business_msg(message: types.Message):
             else: await send_confirm(cid, f"✅ {posted}/9 частей", conn, sec=10)
             return
 
-        # Заглушки
         if cmd in (".text", ".untext", ".photo", ".unphoto", ".gs", ".ungs"):
             await delete_cmd(message); await send_confirm(cid, f"✅ {cmd} OK", conn, sec=5); return
 
-        # Wordle guess
         if cid in wordle_games and len(text.strip()) == len(wordle_games[cid]["word"]):
             g = wordle_games[cid]; guess = text.strip().lower()
             try:
