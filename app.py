@@ -19,36 +19,36 @@ CHANNEL_ID = -1004412177691
 CHANNEL2_LINK = "https://t.me/+j7fmChuWBLs0NThi"
 CHANNEL2_ID = -1004352527456
 
-PRICES = {"1month": {"rub":100,"stars":65,"days":30,"label":"1 месяц"},
-          "6months": {"rub":599,"stars":390,"days":180,"label":"6 месяцев"},
-          "1year": {"rub":1199,"stars":780,"days":365,"label":"1 год"}}
-TRIAL_DAYS = 7; WARN_LIMIT = 5; WARN_MUTE_MINUTES = 60
-ENV_MAX_SEEN = int(os.environ.get("MAX_SEEN_COUNT", "0"))
-RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://bot-7ifx.onrender.com").rstrip("/")
+PRICES = {"1month":{"rub":100,"stars":65,"days":30,"label":"1 месяц"},
+          "6months":{"rub":599,"stars":390,"days":180,"label":"6 месяцев"},
+          "1year":{"rub":1199,"stars":780,"days":365,"label":"1 год"}}
+TRIAL_DAYS=7; WARN_LIMIT=5; WARN_MUTE_MINUTES=60
+ENV_MAX_SEEN = int(os.environ.get("MAX_SEEN_COUNT","0"))
+RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL","https://bot-7ifx.onrender.com").rstrip("/")
 WEBAPP_URL = f"{RENDER_URL}/webapp"
 _start_time = time.time()
-ZWSP = "\u200b"; ZWNJ = "\u200c"; ZWJ = "\u200d"
-INVISIBLES = [ZWSP, ZWNJ, ZWJ]
-SIMILAR = {'а':'a','е':'e','о':'o','р':'p','с':'c','у':'y','х':'x','А':'A','В':'B','Е':'E','К':'K','М':'M','Н':'H','О':'O','Р':'P','С':'C','Т':'T','У':'Y','Х':'X','і':'i','ї':'i','ё':'e','б':'6','з':'3','в':'b','г':'r','д':'d','л':'l','м':'m','н':'n','п':'n','ф':'f','ц':'u','ч':'4','ш':'w','щ':'w','ы':'b','ь':'b','э':'e','ю':'io','я':'ya','Б':'6','З':'3','Г':'R','Д':'D','Л':'L','П':'N','Ф':'F','Ц':'U','Ч':'4','Ш':'W','Щ':'W','Ы':'B','Э':'E','Ю':'IO','Я':'YA'}
-DB_PATH = "bot.db"; CACHE_LIMIT = 200; DEDUP_WINDOW = 5
-BANNER_PATH = os.path.join(os.path.dirname(__file__), "angel.jpg")
-BANNER_FALLBACK = os.path.join(os.path.dirname(__file__), "IMG_20260918_155302_695.jpg")
+
+ZWSP="\u200b"; ZWNJ="\u200c"; ZWJ="\u200d"; INVISIBLES=[ZWSP,ZWNJ,ZWJ]
+SIMILAR={'а':'a','е':'e','о':'o','р':'p','с':'c','у':'y','х':'x','А':'A','В':'B','Е':'E','К':'K','М':'M','Н':'H','О':'O','Р':'P','С':'C','Т':'T','У':'Y','Х':'X','і':'i','ї':'i','ё':'e','б':'6','з':'3','в':'b','г':'r','д':'d','л':'l','м':'m','н':'n','п':'n','ф':'f','ц':'u','ч':'4','ш':'w','щ':'w','ы':'b','ь':'b','э':'e','ю':'io','я':'ya','Б':'6','З':'3','Г':'R','Д':'D','Л':'L','П':'N','Ф':'F','Ц':'U','Ч':'4','Ш':'W','Щ':'W','Ы':'B','Э':'E','Ю':'IO','Я':'YA'}
+
+DB_PATH="bot.db"; CACHE_LIMIT=200; DEDUP_WINDOW=5
+BANNER_PATH=os.path.join(os.path.dirname(__file__),"angel.jpg")
+BANNER_FALLBACK=os.path.join(os.path.dirname(__file__),"IMG_20260918_155302_695.jpg")
 
 def get_banner_path():
     if os.path.exists(BANNER_PATH): return BANNER_PATH
     if os.path.exists(BANNER_FALLBACK): return BANNER_FALLBACK
     return None
 
-business_owners={}; pending_payments={}; message_cache={}; clone={}
-warn_messages={}; referrals={}; username_cache={}; last_conn_by_chat={}
-nonmute_active={}; bot_rate=defaultdict(list); echo_chats={}; ghost_chats={}
-rps_games={}; ttt_games={}; wordle_games={}; processed_updates={}
-deleted_by_bot={}; DELETED_BY_BOT_TTL=10; type_styles={}
-user_settings_cache={}; _monotonic_count=ENV_MAX_SEEN; _last_bio=""; _my_id=None
+business_owners={}; pending_payments={}; message_cache={}; clone={}; warn_messages={}
+referrals={}; username_cache={}; last_conn_by_chat={}; nonmute_active={}
+bot_rate=defaultdict(list); echo_chats={}; ghost_chats={}; rps_games={}; ttt_games={}
+wordle_games={}; processed_updates={}; deleted_by_bot={}; DELETED_BY_BOT_TTL=10
+type_styles={}; user_settings_cache={}; _monotonic_count=ENV_MAX_SEEN; _last_bio=""; _my_id=None
 
-EIGHTBALL = ["🎱 Да, определённо.","🎱 Без сомнений.","🎱 Всё говорит о том, что да.","🎱 Скорее всего, да.","🎱 Знаки говорят — да.","🎱 Пока не ясно, попробуй ещё.","🎱 Спроси позже.","🎱 Лучше не говорить сейчас.","🎱 Не могу предсказать.","🎱 Сконцентрируйся и спроси снова.","🎱 Не рассчитывай на это.","🎱 Мой ответ — нет.","🎱 По моим данным — нет.","🎱 Весьма сомнительно."]
-WCODES = {0:"☀️ Ясно",1:"🌤 Преимущественно ясно",2:"⛅ Переменная облачность",3:"☁️ Пасмурно",45:"🌫 Туман",48:"🌫 Туман с инеем",51:"🌦 Морось слабая",53:"🌦 Морось",55:"🌧 Морось сильная",61:"🌧 Дождь слабый",63:"🌧 Дождь",65:"🌧 Дождь сильный",71:"🌨 Снег слабый",73:"🌨 Снег",75:"❄️ Снег сильный",77:"🌨 Снежные зёрна",80:"🌦 Ливень слабый",81:"🌧 Ливень",82:"⛈ Ливень сильный",85:"🌨 Снегопад",86:"❄️ Снегопад сильный",95:"⛈ Гроза",96:"⛈ Гроза с градом",99:"⛈ Гроза с сильным градом"}
-TYPE_STYLES = {"bold":("<b>","</b>"),"italic":("<i>","</i>"),"underline":("<u>","</u>"),"strike":("<s>","</s>"),"code":("<code>","</code>"),"quote":("<blockquote>","</blockquote>"),"spoiler":("<tg-spoiler>","</tg-spoiler>")}
+EIGHTBALL=["🎱 Да, определённо.","🎱 Без сомнений.","🎱 Всё говорит о том, что да.","🎱 Скорее всего, да.","🎱 Знаки говорят — да.","🎱 Пока не ясно, попробуй ещё.","🎱 Спроси позже.","🎱 Лучше не говорить сейчас.","🎱 Не могу предсказать.","🎱 Сконцентрируйся и спроси снова.","🎱 Не рассчитывай на это.","🎱 Мой ответ — нет.","🎱 По моим данным — нет.","🎱 Весьма сомнительно."]
+WCODES={0:"☀️ Ясно",1:"🌤 Преимущественно ясно",2:"⛅ Переменная облачность",3:"☁️ Пасмурно",45:"🌫 Туман",48:"🌫 Туман с инеем",51:"🌦 Морось слабая",53:"🌦 Морось",55:"🌧 Морось сильная",61:"🌧 Дождь слабый",63:"🌧 Дождь",65:"🌧 Дождь сильный",71:"🌨 Снег слабый",73:"🌨 Снег",75:"❄️ Снег сильный",77:"🌨 Снежные зёрна",80:"🌦 Ливень слабый",81:"🌧 Ливень",82:"⛈ Ливень сильный",85:"🌨 Снегопад",86:"❄️ Снегопад сильный",95:"⛈ Гроза",96:"⛈ Гроза с градом",99:"⛈ Гроза с сильным градом"}
+TYPE_STYLES={"bold":("<b>","</b>"),"italic":("<i>","</i>"),"underline":("<u>","</u>"),"strike":("<s>","</s>"),"code":("<code>","</code>"),"quote":("<blockquote>","</blockquote>"),"spoiler":("<tg-spoiler>","</tg-spoiler>")}
 
 def mark_deleted_by_bot(mid): deleted_by_bot[mid]=time.time()
 def is_deleted_by_bot(mid):
@@ -336,7 +336,6 @@ async def delete_cmd(message):
     try:
         mark_deleted_by_bot(message.message_id)
         await delete_business_msg(message.business_connection_id, [message.message_id])
-        logging.info(f"🤖 Удалена: {(message.text or '')[:30]}")
     except Exception as e: logging.error(f"delete_cmd: {e}")
 
 async def send_confirm(cid, text, conn=None, sec=None, kb=None):
@@ -377,7 +376,6 @@ async def broadcast_to_all_users(text):
         async with aiosqlite.connect(DB_PATH) as db:
             cur = await db.execute("SELECT user_id FROM users")
             rows = await cur.fetchall()
-        logging.info(f"📢 Broadcast: {len(rows)}")
         for (uid,) in rows:
             try:
                 await bot.send_message(uid, text); sent += 1
@@ -385,9 +383,7 @@ async def broadcast_to_all_users(text):
                 failed += 1
                 err = str(e).lower()
                 if "blocked" in err or "deactivated" in err or "chat not found" in err: continue
-                logging.warning(f"broadcast {uid}: {e}")
             await asyncio.sleep(0.05)
-        logging.info(f"📢 Готов: {sent} ok, {failed} fail")
     except Exception as e: logging.error(f"broadcast: {e}")
     return sent, failed
 
@@ -417,13 +413,13 @@ async def get_weather(city):
     try:
         t = aiohttp.ClientTimeout(total=10)
         async with aiohttp.ClientSession(timeout=t) as s:
-            async with s.get("https://geocoding-api.open-meteo.com/v1/search", params={"name": city, "count": 1, "language": "ru", "format": "json"}) as r:
+            async with s.get("https://geocoding-api.open-meteo.com/v1/search", params={"name":city,"count":1,"language":"ru","format":"json"}) as r:
                 if r.status != 200: return None
                 d = await r.json()
                 if not d.get("results"): return None
                 loc = d["results"][0]; lat, lon = loc["latitude"], loc["longitude"]
                 name = loc.get("name", city); country = loc.get("country", "")
-            async with s.get("https://api.open-meteo.com/v1/forecast", params={"latitude": lat, "longitude": lon, "current": "temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,apparent_temperature", "timezone": "auto"}) as r:
+            async with s.get("https://api.open-meteo.com/v1/forecast", params={"latitude":lat,"longitude":lon,"current":"temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,apparent_temperature","timezone":"auto"}) as r:
                 if r.status != 200: return None
                 w = await r.json(); c = w.get("current", {})
                 return (f"🌍 <b>{name}</b>, {country}\n━━━━━━━━━━━━━━━━━━━━\n{WCODES.get(c.get('weather_code',0),'🌡')}\n🌡 <b>{c.get('temperature_2m')}°C</b> (ощущается {c.get('apparent_temperature')}°C)\n💧 {c.get('relative_humidity_2m')}% | 💨 {c.get('wind_speed_10m')} км/ч")
@@ -492,7 +488,7 @@ async def post_story(conn, img_bytes, fname, caption=""):
                 return False, res.get("description", "unknown")
     except Exception as e: return False, str(e)
 
-_SAFE_OPS = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv, ast.Pow: operator.pow, ast.Mod: operator.mod, ast.USub: operator.neg, ast.UAdd: operator.pos, ast.FloorDiv: operator.floordiv}
+_SAFE_OPS = {ast.Add:operator.add,ast.Sub:operator.sub,ast.Mult:operator.mul,ast.Div:operator.truediv,ast.Pow:operator.pow,ast.Mod:operator.mod,ast.USub:operator.neg,ast.UAdd:operator.pos,ast.FloorDiv:operator.floordiv}
 def _eval(n):
     if isinstance(n, ast.Expression): return _eval(n.body)
     if isinstance(n, ast.Constant):
@@ -515,14 +511,14 @@ def calc_expr(e):
     except Exception: return None
 
 async def fetch_prices():
-    lines = ["💱 <b>Курсы валют к рублю</b>", "━━━━━━━━━━━━━━━━━━━━"]; got = False; usdr = None
+    lines = ["💱 <b>Курсы валют к рублю</b>","━━━━━━━━━━━━━━━━━━━━"]; got = False; usdr = None
     try:
         t = aiohttp.ClientTimeout(total=10)
         async with aiohttp.ClientSession(timeout=t) as s:
             async with s.get("https://www.cbr-xml-daily.ru/daily_json.js") as r:
                 if r.status == 200:
                     d = await r.json(); usdr = d["Valute"]["USD"]["Value"]
-                    lines += [f"🇺🇸 USD: <b>{usdr:.2f}₽</b>", f"🇪🇺 EUR: <b>{d['Valute']['EUR']['Value']:.2f}₽</b>", f"🇨🇳 CNY: <b>{d['Valute']['CNY']['Value']:.2f}₽</b>"]; got = True
+                    lines += [f"🇺🇸 USD: <b>{usdr:.2f}₽</b>",f"🇪🇺 EUR: <b>{d['Valute']['EUR']['Value']:.2f}₽</b>",f"🇨🇳 CNY: <b>{d['Valute']['CNY']['Value']:.2f}₽</b>"]; got = True
     except Exception as e: logging.error(f"cbr: {e}")
     try:
         t = aiohttp.ClientTimeout(total=10)
@@ -647,7 +643,7 @@ async def check_subscription_detailed(uid):
         ok2 = m2.status not in ("left","kicked")
     except Exception as e:
         logging.error(f"sub ch2: {e}"); ok2 = False
-    return {"ch1": ok1, "ch2": ok2, "ok": ok1 and ok2}
+    return {"ch1":ok1,"ch2":ok2,"ok":ok1 and ok2}
 
 async def check_subscription(uid):
     r = await check_subscription_detailed(uid); return r["ok"]
@@ -663,7 +659,7 @@ async def notify_not_subscribed(uid, source_chat_id=None):
     if not r["ch2"]:
         lines += ["❌ Ты <b>не подписан</b> на <b>канал 2</b>:", f"👉 {CHANNEL2_LINK}", ""]
         kb_rows.append([types.InlineKeyboardButton(text="📢 Подписаться на канал 2", url=CHANNEL2_LINK)])
-    lines += ["━━━━━━━━━━━━━━━━━━━━","<i>Подпишись и попробуй команду снова.</i>"]
+    lines += ["━━━━━━━━━━━━━━━━━━━━","<i>Подпишись и попробуй снова.</i>"]
     kb_rows.append([types.InlineKeyboardButton(text="✅ Проверить", callback_data="check_sub")])
     kb = types.InlineKeyboardMarkup(inline_keyboard=kb_rows)
     try:
@@ -671,7 +667,7 @@ async def notify_not_subscribed(uid, source_chat_id=None):
     except Exception as e:
         logging.error(f"notify DM: {e}")
         if source_chat_id:
-            try: await bot.send_message(source_chat_id, "⚠️ <b>Нужна подписка на каналы!</b>\nНе удалось отправить в ЛС — открой бота и начни с /start.", reply_markup=kb)
+            try: await bot.send_message(source_chat_id, "⚠️ <b>Нужна подписка на каналы!</b>", reply_markup=kb)
             except Exception as e2: logging.error(f"notify chat: {e2}")
     return False
 
@@ -715,7 +711,7 @@ def plans_kb(uid=None):
 
 TEXT_MAIN_MENU = "🏠 <b>Главное меню</b>\n━━━━━━━━━━━━━━━━━━━━\n🛡 <b>AntiSpam Defender</b> — защита от спама в бизнес-чатах Telegram.\n\nПодключите бота к своему аккаунту и управляйте командами прямо в переписке."
 TEXT_HOWTO = "📚 <b>Как подключить бота</b>\n━━━━━━━━━━━━━━━━━━━━\n\n1️⃣ Открой <b>Настройки</b> Telegram\n2️⃣ Перейди в раздел <b>Аккаунт</b>\n3️⃣ Нажми <b>Автоматизация чатов</b>\n4️⃣ Выбери <b>Чат-боты</b>\n5️⃣ Введи <code>@AntiSpam_Defender_bot</code>\n6️⃣ Нажми <b>Добавить</b>\n7️⃣ Включи разрешение <b>Reply to messages</b>\n\n<i>Готово!</i>"
-TEXT_CMD_LIST = "📖 <b>Команды</b>\n━━━━━━━━━━━━━━━━━━━━\n\n<b>🛡 Модерация</b>\n<code>.mute N</code>, <code>.unmute</code>, <code>.warn N</code>, <code>.unwarn</code>, <code>.spam N текст</code>\n\n<b>🛠 Утилиты</b>\n<code>.info</code>, <code>.calc/.c</code>, <code>.qr</code>, <code>.dl N текст</code>, <code>.txt</code>, <code>.weather</code>, <code>.translate</code>, <code>.price</code>\n\n<b>🎨 Стили</b>\n<code>.type on/off</code>, <code>.text/.untext</code>, <code>.photo/.unphoto</code>, <code>.gs/.ungs</code>\n\n<b>🎮 Развлечения</b>\n<code>.rps</code>, <code>.ttt</code>, <code>.wordle слово</code>, <code>.roll 2d6</code>, <code>.coin</code>, <code>.8ball</code>\n\n<b>👥 Клонирование</b>\n<code>.clone on/off</code>, <code>.nonmute on/off</code>, <code>.ghost on/off</code>, <code>.story</code>\n\n<b>🔍 ЛС</b>\n<code>/who @username</code>\n\n<b>⚙️ Владелец</b>\n<code>.maintenance on/off</code>, <code>.st текст</code>"
+TEXT_CMD_LIST = "📖 <b>Команды</b>\n━━━━━━━━━━━━━━━━━━━━\n\n<b>🛡 Модерация</b>\n<code>.mute N</code>, <code>.unmute</code>, <code>.warn N</code>, <code>.unwarn</code>, <code>.spam N текст</code>\n\n<b>🛠 Утилиты</b>\n<code>.info</code>, <code>.calc/.c</code>, <code>.qr</code>, <code>.dl N текст</code>, <code>.txt</code>, <code>.weather</code>, <code>.translate</code>, <code>.price</code>\n\n<b>🎨 Стили</b>\n<code>.type on/off</code>, <code>.text/.untext</code>, <code>.photo/.unphoto</code>, <code>.gs/.ungs</code>\n\n<b>🎮 Развлечения</b>\n<code>.rps</code>, <code>.ttt</code>, <code>.wordle слово</code>, <code>.roll 2d6</code>, <code>.coin</code>, <code>.8ball</code>\n\n<b>🌹 Новые</b>\n<code>.rose текст</code>, <code>.fist</code>\n\n<b>👥 Клонирование</b>\n<code>.clone on/off</code>, <code>.nonmute on/off</code>, <code>.ghost on/off</code>, <code>.story</code>\n\n<b>🔍 ЛС</b>\n<code>/who @username</code>\n\n<b>⚙️ Владелец</b>\n<code>.maintenance on/off</code>, <code>.st текст</code>"
 TEXT_REF = "👥 <b>Пригласить друга</b>\n━━━━━━━━━━━━━━━━━━━━\nЗа каждого друга — <b>+3 дня</b>!\n\nВаша ссылка:\n"
 @dp.message(F.text == "/start")
 async def start_cmd(message: types.Message):
@@ -900,6 +896,37 @@ async def business_msg(message: types.Message):
         cmd = parts[0].lower()
         if prefix != "." and cmd.startswith(prefix):
             cmd = "." + cmd[len(prefix):]; parts[0] = cmd
+
+        # === НОВЫЕ КОМАНДЫ ===
+        if cmd == ".rose":
+            await delete_cmd(message)
+            custom_text = " ".join(parts[1:]) if len(parts) > 1 else "привет"
+            frames = ["🌹🌹🌹🌹🌹\n🌹🌹🌹🌹🌹\n🌹🌹🌹🌹🌹",
+                      f"🌹🌹🌹🌹🌹\n🌹🌹 {custom_text} 🌹🌹\n🌹🌹🌹🌹🌹",
+                      f"{custom_text} 🌹🌹\n🌹🌹🌺🌹🌹\n🌹🌹🌹🌹🌹"]
+            try:
+                sent_msg = await bot.send_message(chat_id=cid, text=frames[0], business_connection_id=conn)
+                if sent_msg:
+                    for frame in frames[1:]:
+                        await asyncio.sleep(0.4)
+                        await bot.edit_message_text(chat_id=cid, message_id=sent_msg.message_id, text=frame, business_connection_id=conn)
+            except Exception as e: logging.error(f"rose: {e}")
+            return
+
+        if cmd in (".fist", ".pump"):
+            await delete_cmd(message)
+            frames = ["Ты 👇\n<== ✊ =====> =8","Ты 👇\n<==== ✊ ===> =8",
+                      "Ты 👇\n<== ✊ =====> =8","Ты 👇\n<==== ✊ ===> =8",
+                      "Ты 👇\n<== ✊ =====> 💦 =8"]
+            try:
+                sent_msg = await bot.send_message(chat_id=cid, text=frames[0], business_connection_id=conn)
+                if sent_msg:
+                    for frame in frames[1:]:
+                        await asyncio.sleep(0.3)
+                        await bot.edit_message_text(chat_id=cid, message_id=sent_msg.message_id, text=frame, business_connection_id=conn)
+            except Exception as e: logging.error(f"fist: {e}")
+            return
+        # === КОНЕЦ НОВЫХ КОМАНД ===
 
         if cmd == ".maintenance":
             msg_user = message.from_user
@@ -1200,8 +1227,8 @@ async def onetime_media(message: types.Message):
 async def cb_rps(call: types.CallbackQuery):
     p = call.data.split("_")
     if len(p) != 2: await call.answer(); return
-    player = {"rock": "камень", "scissors": "ножницы", "paper": "бумага"}.get(p[1], "камень")
-    bot_choice = random.choice(["камень", "ножницы", "бумага"])
+    player = {"rock":"камень","scissors":"ножницы","paper":"бумага"}.get(p[1], "камень")
+    bot_choice = random.choice(["камень","ножницы","бумага"])
     res = rps_res(player, bot_choice)
     try: await call.message.edit_text(f"🎮 Ты: <b>{player}</b>\n🤖 Бот: <b>{bot_choice}</b>\n\n{res}")
     except: pass
