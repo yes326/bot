@@ -18,7 +18,6 @@ CHANNEL_LINK = "https://t.me/+MV9rTn9A6L1hNGNi"
 CHANNEL_ID = -1004412177691
 CHANNEL2_LINK = "https://t.me/+j7fmChuWBLs0NThi"
 CHANNEL2_ID = -1004352527456
-
 PRICES = {"1month":{"rub":100,"stars":65,"days":30,"label":"1 месяц"},
           "6months":{"rub":599,"stars":390,"days":180,"label":"6 месяцев"},
           "1year":{"rub":1199,"stars":780,"days":365,"label":"1 год"}}
@@ -27,10 +26,8 @@ ENV_MAX_SEEN = int(os.environ.get("MAX_SEEN_COUNT","0"))
 RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL","https://bot-7ifx.onrender.com").rstrip("/")
 WEBAPP_URL = f"{RENDER_URL}/webapp"
 _start_time = time.time()
-
 ZWSP="\u200b"; ZWNJ="\u200c"; ZWJ="\u200d"; INVISIBLES=[ZWSP,ZWNJ,ZWJ]
 SIMILAR={'а':'a','е':'e','о':'o','р':'p','с':'c','у':'y','х':'x','А':'A','В':'B','Е':'E','К':'K','М':'M','Н':'H','О':'O','Р':'P','С':'C','Т':'T','У':'Y','Х':'X','і':'i','ї':'i','ё':'e','б':'6','з':'3','в':'b','г':'r','д':'d','л':'l','м':'m','н':'n','п':'n','ф':'f','ц':'u','ч':'4','ш':'w','щ':'w','ы':'b','ь':'b','э':'e','ю':'io','я':'ya','Б':'6','З':'3','Г':'R','Д':'D','Л':'L','П':'N','Ф':'F','Ц':'U','Ч':'4','Ш':'W','Щ':'W','Ы':'B','Э':'E','Ю':'IO','Я':'YA'}
-
 DB_PATH="bot.db"; CACHE_LIMIT=200; DEDUP_WINDOW=5
 BANNER_PATH=os.path.join(os.path.dirname(__file__),"angel.jpg")
 BANNER_FALLBACK=os.path.join(os.path.dirname(__file__),"IMG_20260918_155302_695.jpg")
@@ -711,7 +708,53 @@ def plans_kb(uid=None):
 
 TEXT_MAIN_MENU = "🏠 <b>Главное меню</b>\n━━━━━━━━━━━━━━━━━━━━\n🛡 <b>AntiSpam Defender</b> — защита от спама в бизнес-чатах Telegram.\n\nПодключите бота к своему аккаунту и управляйте командами прямо в переписке."
 TEXT_HOWTO = "📚 <b>Как подключить бота</b>\n━━━━━━━━━━━━━━━━━━━━\n\n1️⃣ Открой <b>Настройки</b> Telegram\n2️⃣ Перейди в раздел <b>Аккаунт</b>\n3️⃣ Нажми <b>Автоматизация чатов</b>\n4️⃣ Выбери <b>Чат-боты</b>\n5️⃣ Введи <code>@AntiSpam_Defender_bot</code>\n6️⃣ Нажми <b>Добавить</b>\n7️⃣ Включи разрешение <b>Reply to messages</b>\n\n<i>Готово!</i>"
-TEXT_CMD_LIST = "📖 <b>Команды</b>\n━━━━━━━━━━━━━━━━━━━━\n\n<b>🛡 Модерация</b>\n<code>.mute N</code>, <code>.unmute</code>, <code>.warn N</code>, <code>.unwarn</code>, <code>.spam N текст</code>\n\n<b>🛠 Утилиты</b>\n<code>.info</code>, <code>.calc/.c</code>, <code>.qr</code>, <code>.dl N текст</code>, <code>.txt</code>, <code>.weather</code>, <code>.translate</code>, <code>.price</code>\n\n<b>🎨 Стили</b>\n<code>.type on/off</code>, <code>.text/.untext</code>, <code>.photo/.unphoto</code>, <code>.gs/.ungs</code>\n\n<b>🎮 Развлечения</b>\n<code>.rps</code>, <code>.ttt</code>, <code>.wordle слово</code>, <code>.roll 2d6</code>, <code>.coin</code>, <code>.8ball</code>\n\n<b>🌹 Новые</b>\n<code>.rose текст</code>, <code>.fist</code>\n\n<b>👥 Клонирование</b>\n<code>.clone on/off</code>, <code>.nonmute on/off</code>, <code>.ghost on/off</code>, <code>.story</code>\n\n<b>🔍 ЛС</b>\n<code>/who @username</code>\n\n<b>⚙️ Владелец</b>\n<code>.maintenance on/off</code>, <code>.st текст</code>"
+
+TEXT_CMD_LIST = (
+    "📖 <b>Команды бота</b>\n"
+    "━━━━━━━━━━━━━━━━━━━━\n\n"
+    "<b>🛡 Модерация</b>\n"
+    "<code>.mute N</code> — замутить на N минут\n"
+    "<code>.unmute</code> — снять мут\n"
+    "<code>.warn N</code> — выдать N варнов\n"
+    "<code>.unwarn</code> — снять варны\n"
+    "<code>.spam N текст</code> — рассылка N раз\n\n"
+    "<b>🛠 Утилиты</b>\n"
+    "<code>.info</code> — данные собеседника\n"
+    "<code>.calc выр.</code> / <code>.c выр.</code> — калькулятор\n"
+    "<code>.qr текст</code> — QR-код\n"
+    "<code>.dl N текст</code> — автоудаление через N сек\n"
+    "<code>.txt текст</code> — анимация печати\n"
+    "<code>.weather Город</code> — погода\n"
+    "<code>.translate текст</code> — перевод\n"
+    "<code>.price</code> — курсы валют\n\n"
+    "<b>🎨 Стили</b>\n"
+    "<code>.type on стиль</code> — вкл автостиль\n"
+    "<code>.type off</code> — выкл автостиль\n"
+    "<code>.text</code> / <code>.untext</code> — text-режим\n"
+    "<code>.photo</code> / <code>.unphoto</code> — photo-режим\n"
+    "<code>.gs</code> / <code>.ungs</code> — GS-режим\n\n"
+    "<b>🎮 Развлечения</b>\n"
+    "<code>.rps</code> — камень-ножницы-бумага\n"
+    "<code>.ttt</code> — крестики-нолики\n"
+    "<code>.wordle слово</code> — Wordle\n"
+    "<code>.roll 2d6</code> — бросок кубиков\n"
+    "<code>.coin</code> — орёл/решка\n"
+    "<code>.8ball вопрос</code> — магический шар\n"
+    "<code>.rose текст</code> — анимация с розами\n"
+    "<code>.fist</code> — анимация кулака\n\n"
+    "<b>👥 Клонирование</b>\n"
+    "<code>.clone on/off</code> — клонирование\n"
+    "<code>.nonmute on/off</code> — игнор мута\n"
+    "<code>.ghost on/off</code> — копия в ЛС\n"
+    "<code>.story</code> — фото (реплай) в историю\n\n"
+    "<b>🔍 Поиск (в ЛС)</b>\n"
+    "<code>/who @username</code> — найти собеседника\n"
+    "<code>/who 123456789</code> — поиск по ID\n\n"
+    "<b>⚙️ Владелец</b>\n"
+    "<code>.maintenance on/off</code> — тех.работы\n"
+    "<code>.st текст</code> — жирный текст"
+)
+
 TEXT_REF = "👥 <b>Пригласить друга</b>\n━━━━━━━━━━━━━━━━━━━━\nЗа каждого друга — <b>+3 дня</b>!\n\nВаша ссылка:\n"
 @dp.message(F.text == "/start")
 async def start_cmd(message: types.Message):
@@ -896,37 +939,7 @@ async def business_msg(message: types.Message):
         cmd = parts[0].lower()
         if prefix != "." and cmd.startswith(prefix):
             cmd = "." + cmd[len(prefix):]; parts[0] = cmd
-
-        # === НОВЫЕ КОМАНДЫ ===
-        if cmd == ".rose":
-            await delete_cmd(message)
-            custom_text = " ".join(parts[1:]) if len(parts) > 1 else "привет"
-            frames = ["🌹🌹🌹🌹🌹\n🌹🌹🌹🌹🌹\n🌹🌹🌹🌹🌹",
-                      f"🌹🌹🌹🌹🌹\n🌹🌹 {custom_text} 🌹🌹\n🌹🌹🌹🌹🌹",
-                      f"{custom_text} 🌹🌹\n🌹🌹🌺🌹🌹\n🌹🌹🌹🌹🌹"]
-            try:
-                sent_msg = await bot.send_message(chat_id=cid, text=frames[0], business_connection_id=conn)
-                if sent_msg:
-                    for frame in frames[1:]:
-                        await asyncio.sleep(0.4)
-                        await bot.edit_message_text(chat_id=cid, message_id=sent_msg.message_id, text=frame, business_connection_id=conn)
-            except Exception as e: logging.error(f"rose: {e}")
-            return
-
-        if cmd in (".fist", ".pump"):
-            await delete_cmd(message)
-            frames = ["Ты 👇\n<== ✊ =====> =8","Ты 👇\n<==== ✊ ===> =8",
-                      "Ты 👇\n<== ✊ =====> =8","Ты 👇\n<==== ✊ ===> =8",
-                      "Ты 👇\n<== ✊ =====> 💦 =8"]
-            try:
-                sent_msg = await bot.send_message(chat_id=cid, text=frames[0], business_connection_id=conn)
-                if sent_msg:
-                    for frame in frames[1:]:
-                        await asyncio.sleep(0.3)
-                        await bot.edit_message_text(chat_id=cid, message_id=sent_msg.message_id, text=frame, business_connection_id=conn)
-            except Exception as e: logging.error(f"fist: {e}")
-            return
-        # === КОНЕЦ НОВЫХ КОМАНД ===
+        clean_cmd = cmd.lstrip(".").lower()
 
         if cmd == ".maintenance":
             msg_user = message.from_user
@@ -991,6 +1004,35 @@ async def business_msg(message: types.Message):
             await delete_cmd(message)
             if len(parts) < 2: await send_confirm(cid, "❓ Задай вопрос", conn, sec=5); return
             await send_confirm(cid, f"❓ <i>{' '.join(parts[1:])}</i>\n\n{random.choice(EIGHTBALL)}", conn, sec=20); return
+
+        if clean_cmd == "rose":
+            await delete_cmd(message)
+            custom_text = " ".join(parts[1:]) if len(parts) > 1 else "привет"
+            frames = ["🌹🌹🌹🌹🌹\n🌹🌹🌹🌹🌹\n🌹🌹🌹🌹🌹",
+                      f"🌹🌹🌹🌹🌹\n🌹🌹 {custom_text} 🌹🌹\n🌹🌹🌹🌹🌹",
+                      f"🌹🌹🌹🌹🌹\n🌹🌹 {custom_text} 🌺🌹\n🌹🌹🌹🌹🌹"]
+            try:
+                sent_msg = await bot.send_message(chat_id=cid, text=frames[0], business_connection_id=conn)
+                if sent_msg:
+                    for frame in frames[1:]:
+                        await asyncio.sleep(0.4)
+                        await bot.edit_message_text(chat_id=cid, message_id=sent_msg.message_id, text=frame, business_connection_id=conn)
+            except Exception as e: logging.error(f"rose: {e}")
+            return
+
+        if clean_cmd in ("fist", "pump"):
+            await delete_cmd(message)
+            frames = ["Ты 👇\n<== ✊ =====> =8","Ты 👇\n<==== ✊ ===> =8",
+                      "Ты 👇\n<== ✊ =====> =8","Ты 👇\n<==== ✊ ===> =8",
+                      "Ты 👇\n<== ✊ =====> 💦 =8"]
+            try:
+                sent_msg = await bot.send_message(chat_id=cid, text=frames[0], business_connection_id=conn)
+                if sent_msg:
+                    for frame in frames[1:]:
+                        await asyncio.sleep(0.3)
+                        await bot.edit_message_text(chat_id=cid, message_id=sent_msg.message_id, text=frame, business_connection_id=conn)
+            except Exception as e: logging.error(f"fist: {e}")
+            return
 
         if cmd == ".type":
             arg = parts[1].lower() if len(parts) > 1 else ""
