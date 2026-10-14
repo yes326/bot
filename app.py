@@ -713,12 +713,24 @@ TEXT_HOWTO = "📚 <b>Как подключить бота</b>\n━━━━━�
 TEXT_CMD_LIST = (
     "📖 <b>Команды бота</b>\n"
     "━━━━━━━━━━━━━━━━━━━━\n\n"
-    "<b>🛡 Модерация</b>\n"
-    "<code>.mute N</code>, <code>.unmute</code>, <code>.warn N</code>, <code>.unwarn</code>, <code>.spam N текст</code>\n\n"
+    "<b>🛡 Модерация (без реплая — на собеседника)</b>\n"
+    "<code>.mute N</code> — замутить на N минут\n"
+    "<code>.unmute</code> — снять мут\n"
+    "<code>.warn N</code> — выдать N варнов\n"
+    "<code>.unwarn</code> — снять варны\n"
+    "<code>.spam N текст</code> — рассылка\n\n"
     "<b>🛠 Утилиты</b>\n"
-    "<code>.info</code>, <code>.calc/.c</code>, <code>.qr</code>, <code>.dl N текст</code>, <code>.txt</code>, <code>.weather</code>, <code>.translate</code>, <code>.price</code>\n\n"
+    "<code>.info</code> — данные собеседника\n"
+    "<code>.calc выр.</code> / <code>.c выр.</code>\n"
+    "<code>.qr текст</code>\n"
+    "<code>.dl N текст</code>\n"
+    "<code>.txt текст</code>\n"
+    "<code>.weather Город</code>\n"
+    "<code>.translate текст</code>\n"
+    "<code>.price</code>\n\n"
     "<b>🎨 Стили</b>\n"
-    "<code>.type on/off</code>, <code>.text/.untext</code>, <code>.photo/.unphoto</code>, <code>.gs/.ungs</code>\n\n"
+    "<code>.type on/off</code>\n"
+    "<code>.text/.untext</code>, <code>.photo/.unphoto</code>, <code>.gs/.ungs</code>\n\n"
     "<b>🎮 Развлечения</b>\n"
     "<code>.rps</code>, <code>.ttt</code>, <code>.wordle слово</code>, <code>.roll 2d6</code>, <code>.coin</code>, <code>.8ball</code>\n\n"
     "<b>👥 Клонирование</b>\n"
@@ -917,6 +929,13 @@ async def business_msg(message: types.Message):
         if prefix != "." and cmd.startswith(prefix):
             cmd = "." + cmd[len(prefix):]; parts[0] = cmd
 
+        # === Получить цель: из реплая или из chat_id ===
+        def get_target():
+            if message.reply_to_message and message.reply_to_message.from_user:
+                t = message.reply_to_message.from_user
+                return t.id, t.full_name
+            return cid, "собеседник"
+
         if cmd == ".maintenance":
             msg_user = message.from_user
             if not (msg_user and msg_user.username and msg_user.username.lower() == OWNER_USERNAME.lower()):
@@ -938,13 +957,25 @@ async def business_msg(message: types.Message):
             else: await send_confirm(cid, "Использование: <code>.maintenance on/off</code>", conn, sec=10)
             return
 
+        # === .info — без реплая показывает собеседника ===
         if cmd == ".info":
             await delete_cmd(message)
-            t = message.reply_to_message.from_user if message.reply_to_message else None
-            if not t: return
-            un = f"@{t.username}" if t.username else "—"
-            pm = "✅" if getattr(t, "is_premium", False) else "❌"
-            await send_confirm(cid, f"ℹ️ <b>Данные</b>\n━━━━━━━━━━━━━━━━━━━━\n👤 <b>{t.full_name}</b>\n🆔 <code>{t.id}</code>\n📛 {un}\n⭐ {pm}\n━━━━━━━━━━━━━━━━━━━━", conn, sec=15); return
+            t = message.reply_to_message.from_user if message.reply_to_message and message.reply_to_message.from_user else None
+            if t:
+                un = f"@{t.username}" if t.username else "—"
+                pm = "✅" if getattr(t, "is_premium", False) else "❌"
+                await send_confirm(cid, f"ℹ️ <b>Данные</b>\n━━━━━━━━━━━━━━━━━━━━\n👤 <b>{t.full_name}</b>\n🆔 <code>{t.id}</code>\n📛 {un}\n⭐ {pm}\n━━━━━━━━━━━━━━━━━━━━", conn, sec=15)
+            else:
+                # пробуем получить инфо собеседника через get_chat
+                try:
+                    t = await bot.get_chat(cid)
+                    un = f"@{t.username}" if getattr(t, "username", None) else "—"
+                    name = getattr(t, "full_name", None) or getattr(t, "first_name", "—")
+                    await send_confirm(cid, f"ℹ️ <b>Данные собеседника</b>\n━━━━━━━━━━━━━━━━━━━━\n👤 <b>{name}</b>\n🆔 <code>{t.id}</code>\n📛 {un}\n━━━━━━━━━━━━━━━━━━━━", conn, sec=15)
+                except Exception as e:
+                    logging.error(f"info get_chat: {e}")
+                    await send_confirm(cid, "❌ Не удалось получить данные", conn, sec=5)
+            return
 
         if cmd == ".weather":
             if len(parts) < 2: await delete_cmd(message); return
@@ -995,32 +1026,33 @@ async def business_msg(message: types.Message):
                     await delete_cmd(message); await send_confirm(cid, "❌ Неизвестный", conn, sec=5); return
                 type_styles[cid] = style; await delete_cmd(message); await send_confirm(cid, f"✏️ Стиль <b>{style}</b>", conn, sec=5); return
 
+        # === .mute — с реплаем или без ===
         if cmd == ".mute":
             try: mins = int(parts[1]) if len(parts) > 1 else 10
             except: mins = 10
             mins = min(mins, 1440)
-            if not message.reply_to_message or not message.reply_to_message.from_user:
+            tid, tname = get_target()
+            if tid == owner_id_of_conn:
                 await delete_cmd(message); return
-            tid = message.reply_to_message.from_user.id
-            if tid == owner_id_of_conn: await delete_cmd(message); return
             until = datetime.now() + timedelta(minutes=mins)
             await db_set_mute(cid, tid, until); await delete_cmd(message)
-            await send_confirm(cid, f"🔇 <b>Мут</b> {mins} мин. <code>{tid}</code>", conn, sec=10); return
+            await send_confirm(cid, f"🔇 <b>Мут</b> {mins} мин. для <b>{tname}</b> (<code>{tid}</code>)", conn, sec=10); return
 
+        # === .unmute ===
         if cmd == ".unmute":
-            if not message.reply_to_message or not message.reply_to_message.from_user: await delete_cmd(message); return
-            tid = message.reply_to_message.from_user.id
+            tid, tname = get_target()
             await db_clear_mute(cid, tid); await delete_cmd(message)
-            await send_confirm(cid, f"🔊 Мут снят с <code>{tid}</code>", conn, sec=10); return
+            await send_confirm(cid, f"🔊 Мут снят с <b>{tname}</b> (<code>{tid}</code>)", conn, sec=10); return
 
+        # === .warn ===
         if cmd == ".warn":
             try: cnt = int(parts[1]) if len(parts) > 1 else 1
             except: cnt = 1
-            if not message.reply_to_message or not message.reply_to_message.from_user: await delete_cmd(message); return
-            tid = message.reply_to_message.from_user.id
-            if tid == owner_id_of_conn: await delete_cmd(message); return
+            tid, tname = get_target()
+            if tid == owner_id_of_conn:
+                await delete_cmd(message); return
             new_count = await db_add_warn(cid, tid, cnt); await delete_cmd(message)
-            await send_confirm(cid, f"⚠️ <b>Варн</b> {cnt}. Всего: <b>{new_count}</b>/{WARN_LIMIT}", conn, sec=10)
+            await send_confirm(cid, f"⚠️ <b>Варн</b> {cnt} для <b>{tname}</b>. Всего: <b>{new_count}</b>/{WARN_LIMIT}", conn, sec=10)
             if new_count >= WARN_LIMIT:
                 until = datetime.now() + timedelta(minutes=WARN_MUTE_MINUTES)
                 await db_set_mute(cid, tid, until)
@@ -1028,11 +1060,11 @@ async def business_msg(message: types.Message):
                 await db_reset_warn(cid, tid)
             return
 
+        # === .unwarn ===
         if cmd == ".unwarn":
-            if not message.reply_to_message or not message.reply_to_message.from_user: await delete_cmd(message); return
-            tid = message.reply_to_message.from_user.id
+            tid, tname = get_target()
             await db_reset_warn(cid, tid); await delete_cmd(message)
-            await send_confirm(cid, f"✅ Варны сняты с <code>{tid}</code>", conn, sec=10); return
+            await send_confirm(cid, f"✅ Варны сняты с <b>{tname}</b> (<code>{tid}</code>)", conn, sec=10); return
 
         if cmd == ".spam":
             if len(parts) < 3: await delete_cmd(message); return
