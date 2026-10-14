@@ -720,7 +720,7 @@ TEXT_CMD_LIST = (
     "<b>🎨 Стили</b>\n"
     "<code>.type on/off</code>, <code>.text/.untext</code>, <code>.photo/.unphoto</code>, <code>.gs/.ungs</code>\n\n"
     "<b>🎮 Развлечения</b>\n"
-    "<code>.rps</code>, <code>.ttt</code>, <code>.wordle слово</code>, <code>.roll 2d6</code>, <code>.coin</code>, <code>.8ball</code>, <code>.rose текст</code>, <code>.fist</code>\n\n"
+    "<code>.rps</code>, <code>.ttt</code>, <code>.wordle слово</code>, <code>.roll 2d6</code>, <code>.coin</code>, <code>.8ball</code>\n\n"
     "<b>👥 Клонирование</b>\n"
     "<code>.clone on/off</code>, <code>.nonmute on/off</code>, <code>.ghost on/off</code>, <code>.story</code>\n\n"
     "<b>🔍 ЛС</b>\n"
@@ -916,8 +916,6 @@ async def business_msg(message: types.Message):
         cmd = parts[0].lower()
         if prefix != "." and cmd.startswith(prefix):
             cmd = "." + cmd[len(prefix):]; parts[0] = cmd
-        clean_cmd = cmd.lstrip(".").lower()
-        logging.info(f"🎯 Команда: {cmd}")
 
         if cmd == ".maintenance":
             msg_user = message.from_user
@@ -982,60 +980,6 @@ async def business_msg(message: types.Message):
             await delete_cmd(message)
             if len(parts) < 2: await send_confirm(cid, "❓ Задай вопрос", conn, sec=5); return
             await send_confirm(cid, f"❓ <i>{' '.join(parts[1:])}</i>\n\n{random.choice(EIGHTBALL)}", conn, sec=20); return
-
-        # === .ROSE ===
-        if clean_cmd == "rose":
-            await delete_cmd(message)
-            custom_text = " ".join(parts[1:]) if len(parts) > 1 else ""
-            if len(custom_text) > 8: custom_text = custom_text[:8]
-            R = "🌹"
-            row6 = R * 6
-            if custom_text:
-                text_len = len(custom_text)
-                if text_len > 4:
-                    custom_text = custom_text[:4]; text_len = len(custom_text)
-                left_pad = (4 - text_len) // 2
-                right_pad = 4 - text_len - left_pad
-                center_line = f"{R}{R}" + " " * left_pad + custom_text + " " * right_pad + f"{R}{R}"
-            else:
-                center_line = row6
-            frames = [
-                (row6 + "\n") * 5 + row6,
-                (row6 + "\n") * 2 + center_line + "\n" + (row6 + "\n") * 2 + row6,
-            ]
-            try:
-                sent_msg = await bot.send_message(chat_id=cid, text=frames[0], business_connection_id=conn)
-                if sent_msg:
-                    for frame in frames[1:]:
-                        await asyncio.sleep(0.5)
-                        try:
-                            await bot.edit_message_text(chat_id=cid, message_id=sent_msg.message_id, text=frame, business_connection_id=conn)
-                        except Exception as e:
-                            logging.error(f"rose frame: {e}"); break
-            except Exception as e: logging.error(f"rose: {e}")
-            return
-
-        # === .FIST ===
-        if clean_cmd in ("fist", "pump"):
-            await delete_cmd(message)
-            frames = [
-                "Ты 👇\n[== ✊ ====] =8",
-                "Ты 👇\n[=== ✊ ===] =8",
-                "Ты 👇\n[== ✊ ====] =8",
-                "Ты 👇\n[=== ✊ ===] =8",
-                "Ты 👇\n[== ✊ ====] 💦 =8"
-            ]
-            try:
-                sent_msg = await bot.send_message(chat_id=cid, text=frames[0], business_connection_id=conn)
-                if sent_msg:
-                    for frame in frames[1:]:
-                        await asyncio.sleep(0.4)
-                        try:
-                            await bot.edit_message_text(chat_id=cid, message_id=sent_msg.message_id, text=frame, business_connection_id=conn)
-                        except Exception as e:
-                            logging.error(f"fist frame: {e}"); break
-            except Exception as e: logging.error(f"fist: {e}")
-            return
 
         if cmd == ".type":
             arg = parts[1].lower() if len(parts) > 1 else ""
@@ -1254,7 +1198,7 @@ async def business_msg(message: types.Message):
     except Exception as e: logging.error(f"business_msg: {e}")
 
 # ============================================================
-# ОДНОРАЗОВОЕ — ИДЁТ ПОСЛЕ business_msg!
+# ОДНОРАЗОВОЕ — ИДЁТ ПОСЛЕ business_msg
 # ============================================================
 @dp.business_message(F.reply_to_message)
 async def onetime_media(message: types.Message):
