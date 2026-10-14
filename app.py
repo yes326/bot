@@ -333,6 +333,7 @@ async def delete_cmd(message):
     try:
         mark_deleted_by_bot(message.message_id)
         await delete_business_msg(message.business_connection_id, [message.message_id])
+        logging.info(f"🤖 Удалена: {(message.text or '')[:30]}")
     except Exception as e: logging.error(f"delete_cmd: {e}")
 
 async def send_confirm(cid, text, conn=None, sec=None, kb=None):
@@ -820,7 +821,6 @@ async def on_deleted_messages(event: types.BusinessMessagesDeleted):
                     if txt_preview: caption += f"\n💬 {txt_preview[:200]}"
                     caption += "\n━━━━━━━━━━━━━━━━━━━━"
                     await bot.send_photo(chat_id=owner_id_of_conn, photo=photo_fid, caption=caption)
-                    logging.info(f"📸 Удалённое фото в ЛС (от {author_id})")
                 except Exception as e: logging.error(f"del_photo: {e}")
             elif settings["notify_delete"]:
                 preview = (data.get("text") or "[медиа]")[:200]
@@ -855,6 +855,9 @@ async def on_edited_business_msg(message: types.Message):
         except Exception as e: logging.error(f"notify_edit: {e}")
     except Exception as e: logging.error(f"on_edit: {e}")
 
+# ============================================================
+# ГЛАВНЫЙ ХЕНДЛЕР — ИДЁТ ПЕРВЫМ!
+# ============================================================
 @dp.business_message()
 async def business_msg(message: types.Message):
     try:
@@ -863,6 +866,7 @@ async def business_msg(message: types.Message):
         conn = message.business_connection_id
         owner_id_of_conn = await get_owner_id(conn)
         if not owner_id_of_conn: return
+        logging.info(f"📩 business_msg: cid={cid} text={(text or '[медиа]')[:40]!r}")
         if message.from_user and is_duplicate(cid, message.from_user.id, text): return
         cache_message(message)
         if message.from_user:
@@ -913,85 +917,7 @@ async def business_msg(message: types.Message):
         if prefix != "." and cmd.startswith(prefix):
             cmd = "." + cmd[len(prefix):]; parts[0] = cmd
         clean_cmd = cmd.lstrip(".").lower()
-
-        # === .ROSE — 6×6 роз с текстом в центре ===
-        if clean_cmd == "rose":
-            await delete_cmd(message)
-            await asyncio.sleep(0.3)  # пауза после удаления
-            custom_text = " ".join(parts[1:]) if len(parts) > 1 else ""
-            if len(custom_text) > 8: custom_text = custom_text[:8]
-            R = "🌹"
-            row6 = R * 6
-            if custom_text:
-                # 🌹🌹 + текст + 🌹🌹 (по 4 клетки на розы с каждой стороны)
-                text_len = len(custom_text)
-                if text_len > 4:
-                    custom_text = custom_text[:4]; text_len = len(custom_text)
-                left_pad = (4 - text_len) // 2
-                right_pad = 4 - text_len - left_pad
-                center_line = f"{R}{R}" + " " * left_pad + custom_text + " " * right_pad + f"{R}{R}"
-            else:
-                center_line = row6
-            frames = [
-                (row6 + "\n") * 5 + row6,
-                (row6 + "\n") * 2 + center_line + "\n" + (row6 + "\n") * 2 + row6,
-            ]
-            try:
-                sent_msg = await bot.send_message(
-                    chat_id=cid,
-                    text=f"<pre>{frames[0]}</pre>",
-                    business_connection_id=conn,
-                    parse_mode="HTML"
-                )
-                if sent_msg:
-                    for frame in frames[1:]:
-                        await asyncio.sleep(0.5)
-                        try:
-                            await bot.edit_message_text(
-                                chat_id=cid,
-                                message_id=sent_msg.message_id,
-                                text=f"<pre>{frame}</pre>",
-                                business_connection_id=conn,
-                                parse_mode="HTML"
-                            )
-                        except Exception as e:
-                            logging.error(f"rose frame: {e}"); break
-            except Exception as e: logging.error(f"rose: {e}")
-            return
-
-        # === .FIST — моноширинная анимация ===
-        if clean_cmd in ("fist", "pump"):
-            await delete_cmd(message)
-            await asyncio.sleep(0.3)
-            frames = [
-                "Ты 👇\n[== ✊ ====] =8",
-                "Ты 👇\n[=== ✊ ===] =8",
-                "Ты 👇\n[== ✊ ====] =8",
-                "Ты 👇\n[=== ✊ ===] =8",
-                "Ты 👇\n[== ✊ ====] 💦 =8"
-            ]
-            try:
-                sent_msg = await bot.send_message(
-                    chat_id=cid,
-                    text=f"<pre>{frames[0]}</pre>",
-                    business_connection_id=conn,
-                    parse_mode="HTML"
-                )
-                if sent_msg:
-                    for frame in frames[1:]:
-                        await asyncio.sleep(0.4)
-                        try:
-                            await bot.edit_message_text(
-                                chat_id=cid,
-                                message_id=sent_msg.message_id,
-                                text=f"<pre>{frame}</pre>",
-                                business_connection_id=conn,
-                                parse_mode="HTML"
-                            )
-                        except Exception as e:
-                            logging.error(f"fist frame: {e}"); break
-            except Exception as e: logging.error(f"fist: {e}")
-            return
+        logging.info(f"🎯 Команда: {cmd}")
 
         if cmd == ".maintenance":
             msg_user = message.from_user
@@ -1057,6 +983,60 @@ async def business_msg(message: types.Message):
             if len(parts) < 2: await send_confirm(cid, "❓ Задай вопрос", conn, sec=5); return
             await send_confirm(cid, f"❓ <i>{' '.join(parts[1:])}</i>\n\n{random.choice(EIGHTBALL)}", conn, sec=20); return
 
+        # === .ROSE ===
+        if clean_cmd == "rose":
+            await delete_cmd(message)
+            custom_text = " ".join(parts[1:]) if len(parts) > 1 else ""
+            if len(custom_text) > 8: custom_text = custom_text[:8]
+            R = "🌹"
+            row6 = R * 6
+            if custom_text:
+                text_len = len(custom_text)
+                if text_len > 4:
+                    custom_text = custom_text[:4]; text_len = len(custom_text)
+                left_pad = (4 - text_len) // 2
+                right_pad = 4 - text_len - left_pad
+                center_line = f"{R}{R}" + " " * left_pad + custom_text + " " * right_pad + f"{R}{R}"
+            else:
+                center_line = row6
+            frames = [
+                (row6 + "\n") * 5 + row6,
+                (row6 + "\n") * 2 + center_line + "\n" + (row6 + "\n") * 2 + row6,
+            ]
+            try:
+                sent_msg = await bot.send_message(chat_id=cid, text=frames[0], business_connection_id=conn)
+                if sent_msg:
+                    for frame in frames[1:]:
+                        await asyncio.sleep(0.5)
+                        try:
+                            await bot.edit_message_text(chat_id=cid, message_id=sent_msg.message_id, text=frame, business_connection_id=conn)
+                        except Exception as e:
+                            logging.error(f"rose frame: {e}"); break
+            except Exception as e: logging.error(f"rose: {e}")
+            return
+
+        # === .FIST ===
+        if clean_cmd in ("fist", "pump"):
+            await delete_cmd(message)
+            frames = [
+                "Ты 👇\n[== ✊ ====] =8",
+                "Ты 👇\n[=== ✊ ===] =8",
+                "Ты 👇\n[== ✊ ====] =8",
+                "Ты 👇\n[=== ✊ ===] =8",
+                "Ты 👇\n[== ✊ ====] 💦 =8"
+            ]
+            try:
+                sent_msg = await bot.send_message(chat_id=cid, text=frames[0], business_connection_id=conn)
+                if sent_msg:
+                    for frame in frames[1:]:
+                        await asyncio.sleep(0.4)
+                        try:
+                            await bot.edit_message_text(chat_id=cid, message_id=sent_msg.message_id, text=frame, business_connection_id=conn)
+                        except Exception as e:
+                            logging.error(f"fist frame: {e}"); break
+            except Exception as e: logging.error(f"fist: {e}")
+            return
+
         if cmd == ".type":
             arg = parts[1].lower() if len(parts) > 1 else ""
             if arg == "off":
@@ -1075,7 +1055,8 @@ async def business_msg(message: types.Message):
             try: mins = int(parts[1]) if len(parts) > 1 else 10
             except: mins = 10
             mins = min(mins, 1440)
-            if not message.reply_to_message or not message.reply_to_message.from_user: await delete_cmd(message); return
+            if not message.reply_to_message or not message.reply_to_message.from_user:
+                await delete_cmd(message); return
             tid = message.reply_to_message.from_user.id
             if tid == owner_id_of_conn: await delete_cmd(message); return
             until = datetime.now() + timedelta(minutes=mins)
@@ -1272,6 +1253,9 @@ async def business_msg(message: types.Message):
             return
     except Exception as e: logging.error(f"business_msg: {e}")
 
+# ============================================================
+# ОДНОРАЗОВОЕ — ИДЁТ ПОСЛЕ business_msg!
+# ============================================================
 @dp.business_message(F.reply_to_message)
 async def onetime_media(message: types.Message):
     if message.text and message.text.startswith("."): return
