@@ -713,46 +713,19 @@ TEXT_CMD_LIST = (
     "📖 <b>Команды бота</b>\n"
     "━━━━━━━━━━━━━━━━━━━━\n\n"
     "<b>🛡 Модерация</b>\n"
-    "<code>.mute N</code> — замутить на N минут\n"
-    "<code>.unmute</code> — снять мут\n"
-    "<code>.warn N</code> — выдать N варнов\n"
-    "<code>.unwarn</code> — снять варны\n"
-    "<code>.spam N текст</code> — рассылка N раз\n\n"
+    "<code>.mute N</code>, <code>.unmute</code>, <code>.warn N</code>, <code>.unwarn</code>, <code>.spam N текст</code>\n\n"
     "<b>🛠 Утилиты</b>\n"
-    "<code>.info</code> — данные собеседника\n"
-    "<code>.calc выр.</code> / <code>.c выр.</code> — калькулятор\n"
-    "<code>.qr текст</code> — QR-код\n"
-    "<code>.dl N текст</code> — автоудаление через N сек\n"
-    "<code>.txt текст</code> — анимация печати\n"
-    "<code>.weather Город</code> — погода\n"
-    "<code>.translate текст</code> — перевод\n"
-    "<code>.price</code> — курсы валют\n\n"
+    "<code>.info</code>, <code>.calc/.c</code>, <code>.qr</code>, <code>.dl N текст</code>, <code>.txt</code>, <code>.weather</code>, <code>.translate</code>, <code>.price</code>\n\n"
     "<b>🎨 Стили</b>\n"
-    "<code>.type on стиль</code> — вкл автостиль\n"
-    "<code>.type off</code> — выкл автостиль\n"
-    "<code>.text</code> / <code>.untext</code> — text-режим\n"
-    "<code>.photo</code> / <code>.unphoto</code> — photo-режим\n"
-    "<code>.gs</code> / <code>.ungs</code> — GS-режим\n\n"
+    "<code>.type on/off</code>, <code>.text/.untext</code>, <code>.photo/.unphoto</code>, <code>.gs/.ungs</code>\n\n"
     "<b>🎮 Развлечения</b>\n"
-    "<code>.rps</code> — камень-ножницы-бумага\n"
-    "<code>.ttt</code> — крестики-нолики\n"
-    "<code>.wordle слово</code> — Wordle\n"
-    "<code>.roll 2d6</code> — бросок кубиков\n"
-    "<code>.coin</code> — орёл/решка\n"
-    "<code>.8ball вопрос</code> — магический шар\n"
-    "<code>.rose текст</code> — анимация с розами\n"
-    "<code>.fist</code> — анимация кулака\n\n"
+    "<code>.rps</code>, <code>.ttt</code>, <code>.wordle слово</code>, <code>.roll 2d6</code>, <code>.coin</code>, <code>.8ball</code>, <code>.rose текст</code>, <code>.fist</code>\n\n"
     "<b>👥 Клонирование</b>\n"
-    "<code>.clone on/off</code> — клонирование\n"
-    "<code>.nonmute on/off</code> — игнор мута\n"
-    "<code>.ghost on/off</code> — копия в ЛС\n"
-    "<code>.story</code> — фото (реплай) в историю\n\n"
-    "<b>🔍 Поиск (в ЛС)</b>\n"
-    "<code>/who @username</code> — найти собеседника\n"
-    "<code>/who 123456789</code> — поиск по ID\n\n"
+    "<code>.clone on/off</code>, <code>.nonmute on/off</code>, <code>.ghost on/off</code>, <code>.story</code>\n\n"
+    "<b>🔍 ЛС</b>\n"
+    "<code>/who @username</code>\n\n"
     "<b>⚙️ Владелец</b>\n"
-    "<code>.maintenance on/off</code> — тех.работы\n"
-    "<code>.st текст</code> — жирный текст"
+    "<code>.maintenance on/off</code>, <code>.st текст</code>"
 )
 
 TEXT_REF = "👥 <b>Пригласить друга</b>\n━━━━━━━━━━━━━━━━━━━━\nЗа каждого друга — <b>+3 дня</b>!\n\nВаша ссылка:\n"
@@ -880,7 +853,7 @@ async def on_edited_business_msg(message: types.Message):
         try:
             await bot.send_message(owner_id_of_conn, f"✏️ <b>Изменено</b>\n━━━━━━━━━━━━━━━━━━━━\n👤 {from_name} <code>{author_id}</code>\n📝 Было: {old_text[:300]}\n🆕 Стало: {new_text[:300]}\n━━━━━━━━━━━━━━━━━━━━")
         except Exception as e: logging.error(f"notify_edit: {e}")
-    except Exception as e: logging.on_error(f"on_edit: {e}")
+    except Exception as e: logging.error(f"on_edit: {e}")
 
 @dp.business_message()
 async def business_msg(message: types.Message):
@@ -941,53 +914,55 @@ async def business_msg(message: types.Message):
             cmd = "." + cmd[len(prefix):]; parts[0] = cmd
         clean_cmd = cmd.lstrip(".").lower()
 
-        # === .ROSE — 6×6 сетка, текст в центре, розы по бокам ===
+        # === .ROSE — 6×6 роз с текстом в центре ===
         if clean_cmd == "rose":
             await delete_cmd(message)
+            await asyncio.sleep(0.3)  # пауза после удаления
             custom_text = " ".join(parts[1:]) if len(parts) > 1 else ""
-            if len(custom_text) > 16: custom_text = custom_text[:16]
-
-            def str_width(s):
-                w = 0
-                for ch in s:
-                    w += 2 if ord(ch) > 0x2000 else 1
-                return w
-
+            if len(custom_text) > 8: custom_text = custom_text[:8]
             R = "🌹"
             row6 = R * 6
-
             if custom_text:
-                # Строка: 🌹🌹 + центрированный текст + 🌹🌹
-                # Розы по бокам занимают по 4 клетки, на текст остаётся 4
-                text_w = str_width(custom_text)
-                if text_w > 4:
-                    custom_text = custom_text[:4]
-                    text_w = str_width(custom_text)
-                left_pad = (4 - text_w) // 2
-                right_pad = 4 - text_w - left_pad
+                # 🌹🌹 + текст + 🌹🌹 (по 4 клетки на розы с каждой стороны)
+                text_len = len(custom_text)
+                if text_len > 4:
+                    custom_text = custom_text[:4]; text_len = len(custom_text)
+                left_pad = (4 - text_len) // 2
+                right_pad = 4 - text_len - left_pad
                 center_line = f"{R}{R}" + " " * left_pad + custom_text + " " * right_pad + f"{R}{R}"
             else:
                 center_line = row6
-
             frames = [
                 (row6 + "\n") * 5 + row6,
                 (row6 + "\n") * 2 + center_line + "\n" + (row6 + "\n") * 2 + row6,
             ]
             try:
-                sent_msg = await bot.send_message(chat_id=cid, text=f"<pre>{frames[0]}</pre>", business_connection_id=conn)
+                sent_msg = await bot.send_message(
+                    chat_id=cid,
+                    text=f"<pre>{frames[0]}</pre>",
+                    business_connection_id=conn,
+                    parse_mode="HTML"
+                )
                 if sent_msg:
                     for frame in frames[1:]:
                         await asyncio.sleep(0.5)
                         try:
-                            await bot.edit_message_text(chat_id=cid, message_id=sent_msg.message_id, text=f"<pre>{frame}</pre>", business_connection_id=conn)
+                            await bot.edit_message_text(
+                                chat_id=cid,
+                                message_id=sent_msg.message_id,
+                                text=f"<pre>{frame}</pre>",
+                                business_connection_id=conn,
+                                parse_mode="HTML"
+                            )
                         except Exception as e:
                             logging.error(f"rose frame: {e}"); break
             except Exception as e: logging.error(f"rose: {e}")
             return
 
-        # === .FIST — моноширинная анимация, ASCII-скобки ===
+        # === .FIST — моноширинная анимация ===
         if clean_cmd in ("fist", "pump"):
             await delete_cmd(message)
+            await asyncio.sleep(0.3)
             frames = [
                 "Ты 👇\n[== ✊ ====] =8",
                 "Ты 👇\n[=== ✊ ===] =8",
@@ -996,12 +971,23 @@ async def business_msg(message: types.Message):
                 "Ты 👇\n[== ✊ ====] 💦 =8"
             ]
             try:
-                sent_msg = await bot.send_message(chat_id=cid, text=f"<pre>{frames[0]}</pre>", business_connection_id=conn)
+                sent_msg = await bot.send_message(
+                    chat_id=cid,
+                    text=f"<pre>{frames[0]}</pre>",
+                    business_connection_id=conn,
+                    parse_mode="HTML"
+                )
                 if sent_msg:
                     for frame in frames[1:]:
                         await asyncio.sleep(0.4)
                         try:
-                            await bot.edit_message_text(chat_id=cid, message_id=sent_msg.message_id, text=f"<pre>{frame}</pre>", business_connection_id=conn)
+                            await bot.edit_message_text(
+                                chat_id=cid,
+                                message_id=sent_msg.message_id,
+                                text=f"<pre>{frame}</pre>",
+                                business_connection_id=conn,
+                                parse_mode="HTML"
+                            )
                         except Exception as e:
                             logging.error(f"fist frame: {e}"); break
             except Exception as e: logging.error(f"fist: {e}")
