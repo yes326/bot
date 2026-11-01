@@ -43,8 +43,7 @@ referrals={}; username_cache={}; last_conn_by_chat={}; nonmute_active={}
 bot_rate=defaultdict(list); echo_chats={}; ghost_chats={}; rps_games={}; ttt_games={}
 wordle_games={}; processed_updates={}; deleted_by_bot={}; DELETED_BY_BOT_TTL=10
 type_styles={}; user_settings_cache={}; _monotonic_count=ENV_MAX_SEEN; _last_bio=""; _my_id=None
-
-EIGHTBALL=["🎱 Да, определённо.","🎱 Без сомнений.","🎱 Всё говорит о том, что да.","🎱 Скорее всего, да.","🎱 Знаки говорят — да.","🎱 Пока не ясно, попробуй ещё.","🎱 Спроси позже.","🎱 Лучше не говорить сейчас.","🎱 Не могу предсказать.","🎱 Сконцентрируйся и спроси снова.","🎱 Не рассчитывай на это.","🎱 Мой ответ — нет.","🎱 По моим данным — нет.","🎱 Весьма сомнительно."]
+EIGHTBALL=["🎱 Да, определенно.","🎱 Без сомнений.","🎱 Всё говорит о том, что да.","🎱 Скорее всего, да.","🎱 Знаки говорят — да.","🎱 Пока не ясно, попробуй ещё.","🎱 Спроси позже.","🎱 Лучше не говорить сейчас.","🎱 Не могу предсказать.","🎱 Сконцентрируйся и спроси снова.","🎱 Не рассчитывай на это.","🎱 Мой ответ — нет.","🎱 По моим данным — нет.","🎱 Весьма сомнительно."]
 WCODES={0:"☀️ Ясно",1:"🌤 Преимущественно ясно",2:"⛅ Переменная облачность",3:"☁️ Пасмурно",45:"🌫 Туман",48:"🌫 Туман с инеем",51:"🌦 Морось слабая",53:"🌦 Морось",55:"🌧 Морось сильная",61:"🌧 Дождь слабый",63:"🌧 Дождь",65:"🌧 Дождь сильный",71:"🌨 Снег слабый",73:"🌨 Снег",75:"❄️ Снег сильный",77:"🌨 Снежные зёрна",80:"🌦 Ливень слабый",81:"🌧 Ливень",82:"⛈ Ливень сильный",85:"🌨 Снегопад",86:"❄️ Снегопад сильный",95:"⛈ Гроза",96:"⛈ Гроза с градом",99:"⛈ Гроза с сильным градом"}
 TYPE_STYLES={"bold":("<b>","</b>"),"italic":("<i>","</i>"),"underline":("<u>","</u>"),"strike":("<s>","</s>"),"code":("<code>","</code>"),"quote":("<blockquote>","</blockquote>"),"spoiler":("<tg-spoiler>","</tg-spoiler>")}
 
@@ -106,7 +105,6 @@ async def set_subscription(user_id, until_dt):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("INSERT OR REPLACE INTO subscriptions (user_id, until) VALUES (?,?)",(user_id,until_dt.isoformat()))
         await db.commit()
-
 async def has_used_trial(user_id):
     async with aiosqlite.connect(DB_PATH) as db:
         cur=await db.execute("SELECT 1 FROM trials WHERE user_id=?",(user_id,))
@@ -184,7 +182,6 @@ async def db_find_contact_by_username(username):
             cur=await db.execute("SELECT * FROM contacts WHERE peer_id=? ORDER BY last_seen DESC LIMIT 5",(pid,))
             return await cur.fetchall()
         except ValueError: return []
-
 async def db_get_settings(uid):
     if uid in user_settings_cache: return user_settings_cache[uid]
     async with aiosqlite.connect(DB_PATH) as db:
@@ -407,7 +404,6 @@ def cache_message(msg):
             for old in sorted(message_cache[cid].keys())[:-CACHE_LIMIT]:
                 message_cache[cid].pop(old, None)
     except Exception as e: logging.error(f"cache_message: {e}")
-
 async def get_weather(city):
     try:
         t = aiohttp.ClientTimeout(total=10)
@@ -508,7 +504,6 @@ def calc_expr(e):
         if isinstance(r, float) and (r != r or abs(r) == float("inf")): return None
         return r
     except Exception: return None
-
 async def fetch_prices():
     lines = ["💱 <b>Курсы валют к рублю</b>","━━━━━━━━━━━━━━━━━━━━"]; got = False; usdr = None
     try:
@@ -630,7 +625,6 @@ async def background_cleanup():
         await asyncio.sleep(30)
         try: cleanup_deleted_by_bot()
         except Exception as e: logging.error(f"cleanup: {e}")
-
 async def check_subscription_detailed(uid):
     try:
         m1 = await bot.get_chat_member(CHANNEL_ID, uid)
@@ -714,8 +708,25 @@ TEXT_HOWTO = "📚 <b>Как подключить бота</b>\n━━━━━�
 TEXT_CMD_LIST = (
     "📖 <b>Команды бота</b>\n"
     "━━━━━━━━━━━━━━━━━━━━\n\n"
-    "<b>🛡 
-  @dp.message(F.text == "/start")
+    "<b>🛡 Модерация (без реплая — на собеседника)</b>\n"
+    "<code>.mute N</code>, <code>.unmute</code>, <code>.warn N</code>, <code>.unwarn</code>, <code>.spam N текст</code>\n\n"
+    "<b>🛠 Утилиты</b>\n"
+    "<code>.info</code>, <code>.calc/.c</code>, <code>.qr</code>, <code>.dl N текст</code>, <code>.txt</code>, <code>.weather</code>, <code>.translate</code>, <code>.price</code>\n\n"
+    "<b>🎨 Стили</b>\n"
+    "<code>.type on/off</code>, <code>.text/.untext</code>, <code>.photo/.unphoto</code>, <code>.gs/.ungs</code>\n\n"
+    "<b>🎮 Развлечения</b>\n"
+    "<code>.rps</code>, <code>.ttt</code>, <code>.wordle слово</code>, <code>.roll 2d6</code>, <code>.coin</code>, <code>.8ball</code>\n\n"
+    "<b>👥 Клонирование</b>\n"
+    "<code>.clone on/off</code>, <code>.nonmute on/off</code>, <code>.ghost on/off</code>, <code>.story</code>\n\n"
+    "<b>🔍 ЛС</b>\n"
+    "<code>/who @username</code>\n\n"
+    "<b>⚙️ Владелец</b>\n"
+    "<code>.maintenance on/off</code>, <code>.st текст</code>"
+)
+
+TEXT_REF = "👥 <b>Пригласить друга</b>\n━━━━━━━━━━━━━━━━━━━━\nЗа каждого друга — <b>+3 дня</b>!\n\nВаша ссылка:\n"
+
+@dp.message(F.text == "/start")
 async def start_cmd(message: types.Message):
     uid = message.from_user.id
     await register_user(uid, message.from_user.username, message.from_user.full_name)
@@ -770,7 +781,6 @@ async def who_cmd(message: types.Message):
         try: ls = datetime.fromisoformat(row["last_seen"]).strftime("%d.%m.%Y %H:%M")
         except: ls = "—"
         await message.answer(f"👤 <b>{peer_username}</b>\n📛 {row['peer_name'] or '—'}\n🆔 <code>{row['peer_id']}</code>\n━━━━━━━━━━━━━━━━━━━━\n🔗 Ведёт переписку с: {owner_str} (<code>{row['owner_id']}</code>)\n🕐 Первое: {fs}\n🕐 Последнее: {ls}\n📊 Сообщений: {row['msg_count']}")
-
 @dp.business_connection()
 async def on_business_connection(conn: types.BusinessConnection):
     try:
@@ -839,10 +849,6 @@ async def on_edited_business_msg(message: types.Message):
             await bot.send_message(owner_id_of_conn, f"✏️ <b>Изменено</b>\n━━━━━━━━━━━━━━━━━━━━\n👤 {from_name} <code>{author_id}</code>\n📝 Было: {old_text[:300]}\n🆕 Стало: {new_text[:300]}\n━━━━━━━━━━━━━━━━━━━━")
         except Exception as e: logging.error(f"notify_edit: {e}")
     except Exception as e: logging.error(f"on_edit: {e}")
-
-# ============================================================
-# ГЛАВНЫЙ ХЕНДЛЕР — ИДЁТ ПЕРВЫМ!
-# ============================================================
 @dp.business_message()
 async def business_msg(message: types.Message):
     try:
@@ -902,7 +908,6 @@ async def business_msg(message: types.Message):
         if prefix != "." and cmd.startswith(prefix):
             cmd = "." + cmd[len(prefix):]; parts[0] = cmd
 
-        # === Получить цель: из реплая или из chat_id ===
         def get_target():
             if message.reply_to_message and message.reply_to_message.from_user:
                 t = message.reply_to_message.from_user
@@ -930,7 +935,6 @@ async def business_msg(message: types.Message):
             else: await send_confirm(cid, "Использование: <code>.maintenance on/off</code>", conn, sec=10)
             return
 
-        # === .info — без реплая показывает собеседника ===
         if cmd == ".info":
             await delete_cmd(message)
             t = message.reply_to_message.from_user if message.reply_to_message and message.reply_to_message.from_user else None
@@ -998,7 +1002,6 @@ async def business_msg(message: types.Message):
                     await delete_cmd(message); await send_confirm(cid, "❌ Неизвестный", conn, sec=5); return
                 type_styles[cid] = style; await delete_cmd(message); await send_confirm(cid, f"✏️ Стиль <b>{style}</b>", conn, sec=5); return
 
-        # === .mute — с реплаем или без ===
         if cmd == ".mute":
             try: mins = int(parts[1]) if len(parts) > 1 else 10
             except: mins = 10
@@ -1010,13 +1013,11 @@ async def business_msg(message: types.Message):
             await db_set_mute(cid, tid, until); await delete_cmd(message)
             await send_confirm(cid, f"🔇 <b>Мут</b> {mins} мин. для <b>{tname}</b> (<code>{tid}</code>)", conn, sec=10); return
 
-        # === .unmute ===
         if cmd == ".unmute":
             tid, tname = get_target()
             await db_clear_mute(cid, tid); await delete_cmd(message)
             await send_confirm(cid, f"🔊 Мут снят с <b>{tname}</b> (<code>{tid}</code>)", conn, sec=10); return
 
-        # === .warn ===
         if cmd == ".warn":
             try: cnt = int(parts[1]) if len(parts) > 1 else 1
             except: cnt = 1
@@ -1031,8 +1032,6 @@ async def business_msg(message: types.Message):
                 await send_confirm(cid, f"🔇 <b>Мут</b> {WARN_MUTE_MINUTES} мин. за {WARN_LIMIT} варнов", conn, sec=15)
                 await db_reset_warn(cid, tid)
             return
-
-        # === .unwarn ===
         if cmd == ".unwarn":
             tid, tname = get_target()
             await db_reset_warn(cid, tid); await delete_cmd(message)
@@ -1077,7 +1076,7 @@ async def business_msg(message: types.Message):
             arg = parts[1].lower() if len(parts) > 1 else ""
             if arg == "on":
                 ghost_chats[cid] = True; await delete_cmd(message); await send_confirm(cid, "👻 Ghost ON", conn, sec=5)
-                        elif arg == "off":
+            elif arg == "off":
                 ghost_chats.pop(cid, None); await delete_cmd(message); await send_confirm(cid, "👻 Ghost OFF", conn, sec=5)
             else: await delete_cmd(message)
             return
@@ -1201,9 +1200,6 @@ async def business_msg(message: types.Message):
             return
     except Exception as e: logging.error(f"business_msg: {e}")
 
-# ============================================================
-# ОДНОРАЗОВОЕ — ИДЁТ ПОСЛЕ business_msg
-# ============================================================
 @dp.business_message(F.reply_to_message)
 async def onetime_media(message: types.Message):
     if message.text and message.text.startswith("."): return
@@ -1219,7 +1215,6 @@ async def onetime_media(message: types.Message):
         await bot.copy_message(chat_id=oid, from_chat_id=rep.chat.id, message_id=rep.message_id)
         await send_confirm(message.chat.id, "📩 В ЛС", conn, sec=3)
     except Exception as e: logging.error(f"onetime: {e}")
-
 @dp.callback_query(F.data.startswith("rps_"))
 async def cb_rps(call: types.CallbackQuery):
     p = call.data.split("_")
