@@ -1,3 +1,0 @@
-aiogram==3.x.x  # актуальную версию посмотри на pypi
-openai
-flask
